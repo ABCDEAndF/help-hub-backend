@@ -161,7 +161,7 @@ public class ReservationService {
     public void expireHolds() {
         var expired = jdbc.sql("""
                 SELECT id, inventory_item_id, quantity FROM reservations
-                WHERE status='HELD' AND expires_at < CURRENT_TIMESTAMP(3) FOR UPDATE SKIP LOCKED
+                WHERE status='HELD' AND expires_at < CURRENT_TIMESTAMP(3) FOR UPDATE
                 """)
             .query((rs, n) -> new ExpiredRow(rs.getLong("id"), rs.getLong("inventory_item_id"), rs.getInt("quantity")))
             .list();
