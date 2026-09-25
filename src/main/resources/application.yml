@@ -78,7 +78,8 @@ app:
     model: ${LLM_MODEL:qwen-plus}
     max-tool-rounds: 4
   wechat:
-    app-id: ${WECHAT_APP_ID:}
+    app-id: ${WECHAT_APP_ID:wx8e6d63e949e813c8}
+    cloud-env: ${WECHAT_CLOUD_ENV:prod-d7gx7nh5z59528a42}
     app-secret: ${WECHAT_APP_SECRET:}
     subscription:
       template-id: ${WECHAT_SUBSCRIBE_TEMPLATE_ID:}
