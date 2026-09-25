@@ -2,6 +2,9 @@ package org.isolatedareas.helphub.auth;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import org.isolatedareas.helphub.domain.Role;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -20,6 +23,8 @@ public class AuthController {
     private final boolean devLoginEnabled;
     private final String expectedWechatAppId;
     private final String expectedCloudEnv;
+    private final String operatorPhone;
+    private final String operatorPassword;
 
     public AuthController(
         UserRepository users,
@@ -27,7 +32,9 @@ public class AuthController {
         WechatAuthService wechat,
         @Value("${app.auth.dev-login-enabled}") boolean devLoginEnabled,
         @Value("${app.wechat.app-id}") String expectedWechatAppId,
-        @Value("${app.wechat.cloud-env}") String expectedCloudEnv
+        @Value("${app.wechat.cloud-env}") String expectedCloudEnv,
+        @Value("${app.auth.operator-phone}") String operatorPhone,
+        @Value("${app.auth.operator-password}") String operatorPassword
     ) {
         this.users = users;
         this.tokens = tokens;
@@ -35,6 +42,8 @@ public class AuthController {
         this.devLoginEnabled = devLoginEnabled;
         this.expectedWechatAppId = expectedWechatAppId;
         this.expectedCloudEnv = expectedCloudEnv;
+        this.operatorPhone = operatorPhone;
+        this.operatorPassword = operatorPassword;
     }
 
     @PostMapping("/dev-login")
@@ -53,6 +62,27 @@ public class AuthController {
         String openId = wechat.exchangeCode(request.code());
         UserAccount user = users.upsertWechatUser(openId,
             displayName(request.displayName()));
+        return tokens.issue(user);
+    }
+
+    @PostMapping("/operator-login")
+    JwtService.TokenResponse operatorLogin(@Valid @RequestBody OperatorLoginRequest request) {
+        if (operatorPhone.isBlank() || operatorPassword.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                "Operator login is not configured");
+        }
+        boolean phoneMatches = MessageDigest.isEqual(operatorPhone.getBytes(StandardCharsets.UTF_8),
+            request.phone().trim().getBytes(StandardCharsets.UTF_8));
+        boolean passwordMatches = MessageDigest.isEqual(operatorPassword.getBytes(StandardCharsets.UTF_8),
+            request.password().getBytes(StandardCharsets.UTF_8));
+        if (!phoneMatches || !passwordMatches) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid operator credentials");
+        }
+        UserAccount user = users.findByPhone(operatorPhone)
+            .filter(UserAccount::enabled)
+            .filter(account -> account.role() == Role.OPERATOR || account.role() == Role.ADMIN)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED,
+                "Operator account is unavailable"));
         return tokens.issue(user);
     }
 
@@ -84,6 +114,9 @@ public class AuthController {
     }
 
     public record WechatLoginRequest(@NotBlank String code, String displayName) {
+    }
+
+    public record OperatorLoginRequest(@NotBlank String phone, @NotBlank String password) {
     }
 
     public record CloudRunLoginRequest(String displayName) {

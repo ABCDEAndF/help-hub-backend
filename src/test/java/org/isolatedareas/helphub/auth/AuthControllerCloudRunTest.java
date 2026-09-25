@@ -20,7 +20,7 @@ class AuthControllerCloudRunTest {
     private final JwtService tokens = mock(JwtService.class);
     private final WechatAuthService wechat = mock(WechatAuthService.class);
     private final AuthController controller = new AuthController(
-        users, tokens, wechat, false, APP_ID, CLOUD_ENV);
+        users, tokens, wechat, false, APP_ID, CLOUD_ENV, "13800000000", "Strong-test-password");
 
     @Test
     void issuesTokenForIdentityInjectedByCloudRun() {

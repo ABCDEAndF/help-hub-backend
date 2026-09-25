@@ -72,6 +72,8 @@ app:
     jwt-secret: ${JWT_SECRET:local-development-secret-change-me-now}
     token-ttl: PT12H
     dev-login-enabled: ${DEV_LOGIN_ENABLED:true}
+    operator-phone: ${OPERATOR_LOGIN_PHONE:}
+    operator-password: ${OPERATOR_LOGIN_PASSWORD:}
   ai:
     base-url: ${LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
     api-key: ${LLM_API_KEY:}
