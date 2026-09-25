@@ -25,6 +25,13 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:help_hub}
     password: ${RABBITMQ_PASSWORD:help-hub-rabbit-local}
+    ssl:
+      enabled: ${RABBITMQ_SSL:false}
+      trust-store: classpath:rabbitmq-truststore.p12
+      trust-store-password: ${RABBITMQ_TRUST_STORE_PASSWORD:changeit}
+      trust-store-type: PKCS12
+      validate-server-certificate: true
+      verify-hostname: true
     publisher-confirm-type: correlated
     publisher-returns: true
     listener:
