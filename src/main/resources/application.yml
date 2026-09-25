@@ -1,17 +1,97 @@
-server:
-  port: 80
-
-
 spring:
+  application:
+    name: isolated-areas-help-hub
   datasource:
-    driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://${MYSQL_ADDRESS}/${MYSQL_DATABASE:springboot_demo}
-    username: ${MYSQL_USERNAME}
-    password: ${MYSQL_PASSWORD}
-  mvc:
-    view:
-      suffix: .html
-      prefix: /
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3307}/${MYSQL_DATABASE:help_hub}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: ${MYSQL_USER:help_hub}
+    password: ${MYSQL_PASSWORD:help-hub-local}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      minimum-idle: 2
+      connection-timeout: 3000
+  flyway:
+    enabled: true
+    locations: classpath:db/migration,classpath:db/dev
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6380}
+      password: ${REDIS_PASSWORD:help-hub-redis-local}
+      timeout: 2s
+      ssl:
+        enabled: ${REDIS_SSL:false}
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:help_hub}
+    password: ${RABBITMQ_PASSWORD:help-hub-rabbit-local}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    listener:
+      simple:
+        acknowledge-mode: auto
+        default-requeue-rejected: false
+        concurrency: 1
+        max-concurrency: 4
 
-mybatis:
-  mapper-locations: classpath*:mapper/*Mapper.xml
+server:
+  port: 8080
+  shutdown: graceful
+  forward-headers-strategy: framework
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized
+  metrics:
+    tags:
+      application: isolated-areas-help-hub
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+app:
+  pickup-code-secret: ${PICKUP_CODE_SECRET:local-pickup-code-secret-change-me-now}
+  cors:
+    allowed-origin-patterns: ${CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*}
+  auth:
+    jwt-secret: ${JWT_SECRET:local-development-secret-change-me-now}
+    token-ttl: PT12H
+    dev-login-enabled: ${DEV_LOGIN_ENABLED:true}
+  ai:
+    base-url: ${LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    api-key: ${LLM_API_KEY:}
+    model: ${LLM_MODEL:qwen-plus}
+    max-tool-rounds: 4
+  wechat:
+    app-id: ${WECHAT_APP_ID:}
+    app-secret: ${WECHAT_APP_SECRET:}
+    subscription:
+      template-id: ${WECHAT_SUBSCRIBE_TEMPLATE_ID:}
+      title-field: ${WECHAT_TEMPLATE_TITLE_FIELD:thing1}
+      status-field: ${WECHAT_TEMPLATE_STATUS_FIELD:phrase2}
+      reference-field: ${WECHAT_TEMPLATE_REFERENCE_FIELD:character_string3}
+      page: ${WECHAT_TEMPLATE_PAGE:pages/notifications/index}
+  wechat-pay:
+    merchant-id: ${WECHAT_PAY_MERCHANT_ID:}
+    merchant-serial: ${WECHAT_PAY_MERCHANT_SERIAL:}
+    private-key-path: ${WECHAT_PAY_PRIVATE_KEY_PATH:}
+    api-v3-key: ${WECHAT_PAY_API_V3_KEY:}
+    payment-notify-url: ${WECHAT_PAY_NOTIFY_URL:}
+    refund-notify-url: ${WECHAT_PAY_REFUND_NOTIFY_URL:}
+  rate-limit:
+    requests-per-minute: ${RATE_LIMIT_PER_MINUTE:120}
+  outbox:
+    batch-size: 100
+    publish-delay-ms: 1000
+
+logging:
+  level:
+    org.springframework.security: INFO
