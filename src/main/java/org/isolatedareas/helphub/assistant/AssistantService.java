@@ -14,6 +14,8 @@ import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
+import org.isolatedareas.helphub.inventory.InventoryItemView;
+import org.isolatedareas.helphub.requests.SupplyRequestView;
 
 @Service
 public class AssistantService {
@@ -123,26 +125,83 @@ public class AssistantService {
     private AssistantModels.ChatResponse fallback(long userId, String conversationId, String message) {
         List<AssistantModels.ToolExecution> executions = new ArrayList<>();
         String content;
-        if (containsAny(message, "库存", "物资", "inventory")) {
+        if (containsAny(message, "危险", "急救", "昏迷", "流血", "火灾", "报警", "120", "110")) {
+            content = "如有人身危险或紧急医疗情况，请立即拨打 120；涉及治安或人身安全请拨打 110。这里可以继续帮您查询青浦公益物资和服务点，但不能代替紧急救援。";
+        } else if (containsAny(message, "库存", "物资", "有什么", "可领取", "inventory")) {
             JsonNode args = json.createObjectNode();
             AssistantToolExecutor.ToolResult result = tools.execute(userId, "check_inventory", args);
             executions.add(new AssistantModels.ToolExecution("check_inventory", result.result()));
-            content = "AI 服务尚未配置，已直接返回实时库存。";
+            content = describeInventory(result.result());
         } else if (containsAny(message, "状态", "申请", "request")) {
             String requestId = extractRequestId(message);
             if (requestId != null) {
                 ObjectNode args = json.createObjectNode().put("requestId", Long.parseLong(requestId));
-                AssistantToolExecutor.ToolResult result = tools.execute(userId, "get_request_status", args);
-                executions.add(new AssistantModels.ToolExecution("get_request_status", result.result()));
-                content = "AI 服务尚未配置，已直接查询该申请。";
+                try {
+                    AssistantToolExecutor.ToolResult result = tools.execute(userId, "get_request_status", args);
+                    executions.add(new AssistantModels.ToolExecution("get_request_status", result.result()));
+                    content = describeRequest(result.result());
+                } catch (IllegalArgumentException notFound) {
+                    content = "未找到属于您的申请 #" + requestId + "，请检查编号后重试。";
+                }
             } else {
                 content = "请提供申请编号，例如“查询申请 123”。";
             }
+        } else if (containsAny(message, "服务点", "青浦", "领取点", "在哪里领", "哪里领取", "附近")) {
+            ObjectNode args = json.createObjectNode();
+            if (message.contains("青浦")) args.put("keyword", "青浦");
+            AssistantToolExecutor.ToolResult result = tools.execute(userId, "list_service_points", args);
+            executions.add(new AssistantModels.ToolExecution("list_service_points", result.result()));
+            content = describeServicePoints(result.result());
         } else {
-            content = "AI 服务尚未配置。您仍可使用需求提交、库存预约、附近服务点和申请查询功能。";
+            content = "我可以直接查询：①“现在有哪些物资” ②“青浦有哪些服务点” ③“查询申请 #编号”。提交需求请打开首页“提交需求”，物资获批后可在“物资预约”选择领取数量。所有物资均为公益免费。";
         }
         saveMessage(conversationId, "ASSISTANT", content, null);
         return new AssistantModels.ChatResponse(conversationId, content, executions, null, false);
+    }
+
+    static String describeInventory(Object value) {
+        if (!(value instanceof List<?> values) || values.isEmpty()) {
+            return "当前没有可领取库存；您可以在首页提交具体需求，我们会记录并跟进。";
+        }
+        List<InventoryItemView> available = values.stream()
+            .filter(InventoryItemView.class::isInstance).map(InventoryItemView.class::cast)
+            .filter(item -> item.freeQuantity() > 0).toList();
+        if (available.isEmpty()) {
+            return "当前库存已全部预约完；您可以在首页提交具体需求，我们会记录并跟进。";
+        }
+        StringBuilder answer = new StringBuilder("当前可免费领取：\n");
+        available.stream().limit(20).forEach(item -> answer.append("• ").append(item.name())
+            .append("：").append(item.freeQuantity()).append(item.unit())
+            .append("（").append(item.servicePointName()).append("）\n"));
+        answer.append("请先提交需求；审核通过后，到“物资预约”选择对应物资和数量。");
+        return answer.toString();
+    }
+
+    static String describeRequest(Object value) {
+        if (!(value instanceof SupplyRequestView request)) return "申请信息暂时无法识别，请稍后重试。";
+        String status = switch (request.status()) {
+            case SUBMITTED -> "已提交，等待审核";
+            case UNDER_REVIEW -> "审核中";
+            case APPROVED -> "已批准，可以预约物资";
+            case SCHEDULED -> "已预约，等待领取或配送";
+            case FULFILLED -> "已完成";
+            case REJECTED -> "未通过";
+            case CANCELLED -> "已取消";
+        };
+        return "申请 #" + request.id() + "：" + request.itemDescription() + "，数量 "
+            + request.quantity() + "，当前状态：" + status + "。";
+    }
+
+    static String describeServicePoints(Object value) {
+        if (!(value instanceof List<?> points) || points.isEmpty()) {
+            return "当前没有匹配的服务点，请改用“青浦有哪些服务点”查询全部青浦点位。";
+        }
+        StringBuilder answer = new StringBuilder("当前公益服务点：\n");
+        points.stream().filter(Map.class::isInstance).map(Map.class::cast).limit(10)
+            .forEach(point -> answer.append("• ").append(point.get("name")).append("：")
+                .append(point.get("address")).append("\n"));
+        answer.append("可在首页地图查看位置，并从库存列表选择对应点位的免费物资。");
+        return answer.toString();
     }
 
     private String ensureConversation(long userId, String requestedId) {
