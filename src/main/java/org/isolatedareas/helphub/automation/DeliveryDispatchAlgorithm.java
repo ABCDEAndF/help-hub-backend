@@ -83,6 +83,8 @@ public class DeliveryDispatchAlgorithm {
         }
         for (Job drop : route.drops()) {
             Instant arrive = clock.plus(travel(leg(lat, lon, drop.latitude(), drop.longitude())));
+            // Never hand over before the slot the resident booked; the cart waits instead.
+            if (drop.notBefore() != null && arrive.isBefore(drop.notBefore())) arrive = drop.notBefore();
             clock = arrive.plus(DROPOFF_DWELL);
             stops.add(new Stop(StopType.DROPOFF, null, drop.requestId(), drop.reservationId(),
                 drop.latitude(), drop.longitude(), arrive, clock));
@@ -205,7 +207,12 @@ public class DeliveryDispatchAlgorithm {
     public record Point(long id, double latitude, double longitude) {
     }
     public record Job(long requestId, long reservationId, int quantity, String urgency, Point pickup,
-                      double latitude, double longitude) {
+                      double latitude, double longitude, Instant notBefore) {
+        /** A delivery wanted as soon as possible. */
+        public Job(long requestId, long reservationId, int quantity, String urgency, Point pickup,
+                   double latitude, double longitude) {
+            this(requestId, reservationId, quantity, urgency, pickup, latitude, longitude, null);
+        }
     }
     public record Stop(StopType type, Long servicePointId, Long requestId, Long reservationId,
                        double latitude, double longitude, Instant arriveAt, Instant departAt) {

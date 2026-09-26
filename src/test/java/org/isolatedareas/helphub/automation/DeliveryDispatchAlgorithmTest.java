@@ -139,6 +139,19 @@ class DeliveryDispatchAlgorithmTest {
     }
 
     @Test
+    void aBookedDeliveryIsNotHandedOverBeforeItsSlot() {
+        var cart = new Cart(1, 120, XIAYANG.latitude(), XIAYANG.longitude());
+        Instant slotStart = START.plus(Duration.ofMinutes(30));
+        var booked = new Job(9, 90, 1, "NORMAL", XIAYANG, 31.1530, 121.1300, slotStart);
+
+        var drop = algorithm.plan(List.of(cart), List.of(booked), List.of(XIAYANG), START).getFirst().stops().stream()
+            .filter(stop -> stop.type() == StopType.DROPOFF).findFirst().orElseThrow();
+
+        assertThat(drop.arriveAt()).isEqualTo(slotStart);
+        assertThat(drop.departAt()).isEqualTo(slotStart.plus(Duration.ofMinutes(3)));
+    }
+
+    @Test
     void noCartMeansNoTrip() {
         var job = new Job(1, 10, 1, "NORMAL", XIAYANG, 31.16, 121.12);
         assertThat(algorithm.plan(List.of(), List.of(job), List.of(XIAYANG), START)).isEmpty();

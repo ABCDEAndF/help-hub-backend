@@ -84,7 +84,9 @@ public class ReservationService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Insufficient inventory");
         }
         inventory.hold(item.id(), input.quantity());
-        Instant expiresAt = Instant.now().plus(HOLD_DURATION);
+        // A code for a booked slot must still be valid when that slot comes round.
+        Instant expiresAt = org.isolatedareas.helphub.requests.ServiceWindow.holdUntil(Instant.now(),
+            request.preferredEnd(), HOLD_DURATION);
         org.springframework.jdbc.support.GeneratedKeyHolder keys = new org.springframework.jdbc.support.GeneratedKeyHolder();
         jdbc.sql("""
                 INSERT INTO reservations
@@ -98,7 +100,8 @@ public class ReservationService {
         String pickupCode = pickupCode(reservationId, residentId);
         jdbc.sql("UPDATE reservations SET pickup_code_hash=:hash WHERE id=:id")
             .param("hash", hash(pickupCode)).param("id", reservationId).update();
-        afterCommit(() -> redis.opsForValue().set("reservation:" + reservationId, "HELD", HOLD_DURATION));
+        afterCommit(() -> redis.opsForValue().set("reservation:" + reservationId, "HELD",
+            java.time.Duration.between(Instant.now(), expiresAt)));
         audit.record(residentId, "RESERVATION_HELD", "RESERVATION", reservationId, null,
             Map.of("requestId", request.id(), "itemId", item.id(), "quantity", input.quantity(), "expiresAt", expiresAt));
         outbox.append("RESERVATION", reservationId, "ReservationHeld", "notification.send",

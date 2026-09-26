@@ -34,6 +34,8 @@ public class CartTripService {
     private static final DateTimeFormatter CLOCK = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.of("Asia/Shanghai"));
     /** A reservation this close to expiry is not worth starting a trip for. */
     private static final Duration MIN_REMAINING_HOLD = Duration.ofHours(2);
+    /** A delivery booked for a slot is dispatched this long before the slot opens. */
+    static final Duration DISPATCH_LEAD = Duration.ofMinutes(30);
 
     private final JdbcClient jdbc;
     private final RequestService requestService;
@@ -297,20 +299,23 @@ public class CartTripService {
     private List<DeliveryDispatchAlgorithm.Job> pendingJobs(boolean lock) {
         return jdbc.sql("""
                 SELECT r.id, res.id AS reservation_id, r.quantity, r.urgency, r.latitude, r.longitude,
-                  p.id AS point_id, p.latitude AS point_lat, p.longitude AS point_lon
+                  r.preferred_start, p.id AS point_id, p.latitude AS point_lat, p.longitude AS point_lon
                 FROM supply_requests r
                 JOIN reservations res ON res.request_id = r.id AND res.status = 'HELD' AND res.expires_at > :minExpiry
                 JOIN inventory_items i ON i.id = res.inventory_item_id
                 JOIN service_points p ON p.id = i.service_point_id
                 WHERE r.status = 'APPROVED' AND r.fulfillment_method = 'DELIVERY'
+                  AND (r.preferred_start IS NULL OR r.preferred_start <= :dispatchHorizon)
                   AND NOT EXISTS (SELECT 1 FROM cart_trip_stops s WHERE s.request_id = r.id AND s.status = 'PENDING')
                 ORDER BY r.created_at
                 """ + (lock ? " FOR UPDATE" : ""))
             .param("minExpiry", Timestamp.from(Instant.now().plus(MIN_REMAINING_HOLD)))
+            .param("dispatchHorizon", Timestamp.from(Instant.now().plus(DISPATCH_LEAD)))
             .query((rs, n) -> new DeliveryDispatchAlgorithm.Job(rs.getLong("id"), rs.getLong("reservation_id"),
                 rs.getInt("quantity"), rs.getString("urgency"),
                 new DeliveryDispatchAlgorithm.Point(rs.getLong("point_id"), rs.getDouble("point_lat"), rs.getDouble("point_lon")),
-                rs.getDouble("latitude"), rs.getDouble("longitude"))).list();
+                rs.getDouble("latitude"), rs.getDouble("longitude"),
+                rs.getTimestamp("preferred_start") == null ? null : rs.getTimestamp("preferred_start").toInstant())).list();
     }
 
     private long insertTrip(DeliveryDispatchAlgorithm.Trip trip, DeliveryDispatchAlgorithm.Cart cart, Long routePlanId,

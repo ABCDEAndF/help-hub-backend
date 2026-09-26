@@ -85,6 +85,10 @@ public class AssistantService {
 
         ArrayNode messages = conversationMessages(conversationId);
         appendRequestIdHint(messages, input.message());
+        java.time.ZonedDateTime now = java.time.ZonedDateTime.now(org.isolatedareas.helphub.requests.ServiceWindow.ZONE);
+        messages.add(json.createObjectNode().put("role", "system").put("content",
+            "当前北京时间：" + now.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd EEEE HH:mm", java.util.Locale.CHINA))
+                + "。居民可预约上午（09:00–12:00）或下午（13:00–17:00）时段，最多提前 7 天；没说时间就按“尽快”处理。"));
         if (input.latitude() != null && input.longitude() != null) {
             messages.add(json.createObjectNode().put("role", "system").put("content",
                 "居民在小程序中保存的位置：纬度 " + input.latitude() + "，经度 " + input.longitude()

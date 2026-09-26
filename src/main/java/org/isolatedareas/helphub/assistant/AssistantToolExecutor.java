@@ -17,6 +17,7 @@ import org.isolatedareas.helphub.inventory.InventoryItemView;
 import org.isolatedareas.helphub.inventory.InventoryRepository;
 import org.isolatedareas.helphub.inventory.ReservationService;
 import org.isolatedareas.helphub.requests.CreateSupplyRequest;
+import org.isolatedareas.helphub.requests.ServiceWindow;
 import org.isolatedareas.helphub.requests.RequestService;
 import org.isolatedareas.helphub.requests.SupplyRequestRepository;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -86,8 +87,11 @@ public class AssistantToolExecutor {
 
     private ToolResult prepareRequest(long userId, JsonNode args) {
         CreateSupplyRequest input = requestInput(args);
+        // Reject an impossible slot now, so the resident is never asked to confirm it.
+        ServiceWindow.validate(input.preferredStart(), input.preferredEnd(), Instant.now());
         String summary = "提交“" + requiredText(args, "itemDescription") + "”需求，数量 " + input.quantity()
             + "，" + (input.fulfillmentMethod() == FulfillmentMethod.PICKUP ? "到服务点自取" : "补给车配送")
+            + "，" + (input.preferredStart() == null ? "尽快" : ServiceWindow.describe(input.preferredStart(), input.preferredEnd()))
             + "，紧急程度：" + urgencyName(input.urgency())
             + (input.inventoryItemId() != null ? "。库存足够会立即自动批准并发放领取码" : "。库存中没有该物资，将转人工处理");
         return ToolResult.confirmation(confirmations.create(userId, "prepare_supply_request", args, summary));
@@ -212,9 +216,15 @@ public class AssistantToolExecutor {
     private String nullableText(JsonNode args, String field) {
         return args.hasNonNull(field) ? args.path(field).asText() : null;
     }
+    // Models write times with or without a zone; a bare local time means Beijing time.
     private Instant nullableInstant(JsonNode args, String field) {
-        return args.hasNonNull(field) && !args.path(field).asText().isBlank()
-            ? Instant.parse(args.path(field).asText()) : null;
+        if (!args.hasNonNull(field) || args.path(field).asText().isBlank()) return null;
+        String text = args.path(field).asText().trim();
+        try {
+            return java.time.OffsetDateTime.parse(text).toInstant();
+        } catch (java.time.format.DateTimeParseException withoutZone) {
+            return java.time.LocalDateTime.parse(text).atZone(ServiceWindow.ZONE).toInstant();
+        }
     }
 
     public record ToolResult(Object result, AssistantModels.Confirmation confirmation) {

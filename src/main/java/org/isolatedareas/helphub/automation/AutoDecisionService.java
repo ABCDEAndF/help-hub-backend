@@ -1,5 +1,7 @@
 package org.isolatedareas.helphub.automation;
 
+import java.time.Instant;
+import java.time.LocalTime;
 import java.util.Comparator;
 import java.util.List;
 import org.isolatedareas.helphub.domain.FulfillmentMethod;
@@ -8,6 +10,7 @@ import org.isolatedareas.helphub.geo.GeoMath;
 import org.isolatedareas.helphub.inventory.ReservationService;
 import org.isolatedareas.helphub.requests.RequestService;
 import org.isolatedareas.helphub.requests.SupplyRequestRepository;
+import org.isolatedareas.helphub.requests.ServiceWindow;
 import org.isolatedareas.helphub.requests.SupplyRequestView;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -52,8 +55,20 @@ public class AutoDecisionService {
         requestService.transition(requestId, actor,
             new RequestService.TransitionRequest(RequestStatus.UNDER_REVIEW, null, null), false);
 
+        boolean pickup = request.fulfillmentMethod() == FulfillmentMethod.PICKUP;
+        Instant start = request.preferredStart();
+        Instant end = request.preferredEnd();
+        // A booked pickup needs a point that is open during the slot.
+        Instant[] bookedWindow = pickup && start != null ? new Instant[] {start, end} : null;
         Candidate chosen = choose(candidates, request.quantity(),
-            request.latitude().doubleValue(), request.longitude().doubleValue());
+            request.latitude().doubleValue(), request.longitude().doubleValue(), bookedWindow);
+        if (chosen == null && bookedWindow != null
+            && choose(candidates, request.quantity(), request.latitude().doubleValue(), request.longitude().doubleValue(), null) != null) {
+            requests.recordDecision(requestId, "所选时段内没有既营业又有货的服务点，已自动拒绝。请改选其他时段，或选择“尽快”后重新提交。");
+            requestService.transition(requestId, actor,
+                new RequestService.TransitionRequest(RequestStatus.REJECTED, null, null), true);
+            return requestService.get(requestId);
+        }
         if (chosen == null) {
             int mostAvailable = candidates.stream().mapToInt(Candidate::freeQuantity).max().orElse(0);
             String name = candidates.isEmpty() ? "该物资" : candidates.getFirst().name();
@@ -69,14 +84,17 @@ public class AutoDecisionService {
             new RequestService.TransitionRequest(RequestStatus.APPROVED, null, null), true);
         reservations.reserve(request.residentId(),
             new ReservationService.ReserveInput(requestId, chosen.itemId(), request.quantity()));
-        if (request.fulfillmentMethod() == FulfillmentMethod.PICKUP) {
+        if (pickup) {
             requestService.transition(requestId, actor,
                 new RequestService.TransitionRequest(RequestStatus.SCHEDULED, chosen.servicePointId(), null), false);
-            requests.recordDecision(requestId, "已自动批准：请在营业时间 " + chosen.hours() + " 到"
-                + chosen.servicePointName() + "，出示领取码领取（领取码见“我的预约”，48 小时内有效）。");
+            String when = start == null ? "营业时间 " + chosen.hours()
+                : describe(ServiceWindow.overlapWithHours(start, end, chosen.opensAt(), chosen.closesAt()));
+            requests.recordDecision(requestId, "已自动批准：请在 " + when + " 到" + chosen.servicePointName()
+                + "，出示领取码领取（领取码见“我的领取码”）。");
         } else {
+            String when = start == null ? "系统正在安排补给车取货配送" : "补给车将于 " + ServiceWindow.describe(start, end) + " 送达";
             requests.recordDecision(requestId, "已自动批准：物资已在" + chosen.servicePointName()
-                + "锁定，系统正在安排补给车取货配送，可在地图查看车辆位置。");
+                + "锁定，" + when + "，出发后可在地图查看车辆位置。");
         }
         return requestService.get(requestId);
     }
@@ -96,14 +114,22 @@ public class AutoDecisionService {
             .query((rs, n) -> new Candidate(rs.getLong("id"), rs.getString("name"), rs.getString("unit"),
                 rs.getInt("free_quantity"), rs.getLong("point_id"), rs.getString("point_name"),
                 rs.getDouble("latitude"), rs.getDouble("longitude"),
-                clock(rs.getString("opens_at")) + "–" + clock(rs.getString("closes_at")))).list();
+                clock(rs.getString("opens_at")) + "–" + clock(rs.getString("closes_at")),
+                rs.getObject("opens_at", LocalTime.class), rs.getObject("closes_at", LocalTime.class))).list();
     }
 
-    static Candidate choose(List<Candidate> candidates, int quantity, double latitude, double longitude) {
+    /** Nearest point with enough stock; with a window, only points open during part of it. */
+    static Candidate choose(List<Candidate> candidates, int quantity, double latitude, double longitude, Instant[] window) {
         return candidates.stream().filter(candidate -> candidate.freeQuantity() >= quantity)
+            .filter(candidate -> window == null
+                || ServiceWindow.overlapWithHours(window[0], window[1], candidate.opensAt(), candidate.closesAt()) != null)
             .min(Comparator.comparingDouble(candidate -> GeoMath.distanceMeters(latitude, longitude,
                 candidate.latitude(), candidate.longitude())))
             .orElse(null);
+    }
+
+    private static String describe(Instant[] window) {
+        return ServiceWindow.describe(window[0], window[1]);
     }
 
     private static String clock(String time) {
@@ -111,6 +137,7 @@ public class AutoDecisionService {
     }
 
     record Candidate(long itemId, String name, String unit, int freeQuantity, long servicePointId,
-                     String servicePointName, double latitude, double longitude, String hours) {
+                     String servicePointName, double latitude, double longitude, String hours,
+                     LocalTime opensAt, LocalTime closesAt) {
     }
 }

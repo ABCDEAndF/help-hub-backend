@@ -28,6 +28,7 @@ public class RequestService {
 
     @Transactional
     public SupplyRequestView create(long residentId, CreateSupplyRequest input) {
+        ServiceWindow.validate(input.preferredStart(), input.preferredEnd(), java.time.Instant.now());
         if (input.inventoryItemId() != null) {
             // A request for a stocked item always takes that item's category, whatever the client sent.
             String category = jdbc.sql("SELECT category FROM inventory_items WHERE id=:id")

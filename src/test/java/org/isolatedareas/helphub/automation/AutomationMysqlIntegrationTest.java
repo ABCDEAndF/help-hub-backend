@@ -197,6 +197,33 @@ class AutomationMysqlIntegrationTest {
         assertThat(requestService.get(courier.id()).decisionNote()).contains("工作人员", "标记送达");
         assertThat(industrialRiceReserved.get()).isZero();
 
+        // Booked times: a pickup tomorrow afternoon near Xiayang is fixed to Xiayang's open hours,
+        // and a delivery booked for tomorrow is not dispatched today.
+        var tomorrow = java.time.LocalDate.now(org.isolatedareas.helphub.requests.ServiceWindow.ZONE).plusDays(1);
+        Instant afternoonStart = tomorrow.atTime(13, 0).atZone(org.isolatedareas.helphub.requests.ServiceWindow.ZONE).toInstant();
+        Instant afternoonEnd = tomorrow.atTime(17, 0).atZone(org.isolatedareas.helphub.requests.ServiceWindow.ZONE).toInstant();
+        SupplyRequestView bookedPickup = tx.execute(s -> decisions.decide(requestService.create(resident,
+            new CreateSupplyRequest("OTHER", "预约自取", 1, Urgency.NORMAL, new BigDecimal("31.1520"), new BigDecimal("121.1300"),
+                null, null, afternoonStart, afternoonEnd, FulfillmentMethod.PICKUP, xiayangRice)).id()));
+        assertThat(bookedPickup.status()).isEqualTo(RequestStatus.SCHEDULED);
+        assertThat(bookedPickup.assignedServicePointName()).isEqualTo("邻需通·夏阳公益服务点");
+        assertThat(bookedPickup.decisionNote()).contains("13:00–16:30");
+        Instant bookedExpiry = jdbc.sql("SELECT expires_at FROM reservations WHERE request_id=:id").param("id", bookedPickup.id())
+            .query(java.sql.Timestamp.class).single().toInstant();
+        assertThat(bookedExpiry).isAfterOrEqualTo(afternoonEnd.plus(java.time.Duration.ofHours(47)));
+        tx.execute(s -> requestService.transition(bookedPickup.id(), system.id(),
+            new RequestService.TransitionRequest(RequestStatus.CANCELLED, null, null)));
+
+        SupplyRequestView bookedDelivery = tx.execute(s -> decisions.decide(requestService.create(resident,
+            new CreateSupplyRequest("OTHER", "预约配送", 1, Urgency.NORMAL, NEAR_INDUSTRIAL_LAT, NEAR_INDUSTRIAL_LON,
+                null, null, afternoonStart, afternoonEnd, FulfillmentMethod.DELIVERY, industrialRice)).id()));
+        assertThat(bookedDelivery.status()).isEqualTo(RequestStatus.APPROVED);
+        assertThat(bookedDelivery.decisionNote()).contains("13:00–17:00", "送达");
+        assertThat(trips.dispatchNeeded()).isFalse();
+        tx.execute(s -> requestService.transition(bookedDelivery.id(), system.id(),
+            new RequestService.TransitionRequest(RequestStatus.CANCELLED, null, null)));
+        assertThat(industrialRiceReserved.get()).isZero();
+
         // Every resident's own numbering starts at 1.
         jdbc.sql("INSERT INTO users (wechat_open_id, display_name) VALUES ('it-neighbour', '邻居')").update();
         long neighbour = jdbc.sql("SELECT id FROM users WHERE wechat_open_id='it-neighbour'").query(Long.class).single();

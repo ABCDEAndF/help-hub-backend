@@ -100,6 +100,10 @@ public class OpenAiCompatibleClient {
         requestProperties.set("accessibilityNotes", stringProperty("行动不便等说明"));
         requestProperties.set("inventoryItemId", integerProperty(
             "所需物资对应的库存编号（来自 check_inventory 结果的 id）；库存中有该物资时务必填写，系统会据此自动审批"));
+        requestProperties.set("preferredStart", stringProperty(
+            "预约时段开始，ISO-8601 带时区，如 2026-09-28T13:00:00+08:00；上午时段 09:00–12:00，下午时段 13:00–17:00，"
+                + "最多提前 7 天；居民要“尽快”时不要传"));
+        requestProperties.set("preferredEnd", stringProperty("预约时段结束，与 preferredStart 同一天，如 2026-09-28T17:00:00+08:00"));
         requestProperties.set("fulfillmentMethod", enumProperty("领取方式：PICKUP 到服务点自取，DELIVERY 补给车配送",
             java.util.List.of("PICKUP", "DELIVERY")));
         tools.add(tool("prepare_supply_request",
