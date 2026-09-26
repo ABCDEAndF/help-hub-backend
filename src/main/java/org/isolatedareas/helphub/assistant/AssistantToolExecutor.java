@@ -85,8 +85,10 @@ public class AssistantToolExecutor {
 
     private ToolResult prepareRequest(long userId, JsonNode args) {
         CreateSupplyRequest input = requestInput(args);
-        String summary = "提交“" + requiredText(args, "itemDescription") + "”需求，数量 "
-            + input.quantity() + "，紧急程度 " + input.urgency();
+        String summary = "提交“" + requiredText(args, "itemDescription") + "”需求，数量 " + input.quantity()
+            + "，" + (input.fulfillmentMethod() == FulfillmentMethod.PICKUP ? "到服务点自取" : "补给车配送")
+            + "，紧急程度：" + urgencyName(input.urgency())
+            + (input.inventoryItemId() != null ? "。库存足够会立即自动批准并发放领取码" : "。库存中没有该物资，将转人工处理");
         return ToolResult.confirmation(confirmations.create(userId, "prepare_supply_request", args, summary));
     }
 
@@ -108,6 +110,15 @@ public class AssistantToolExecutor {
 
     private Object createRequest(long userId, JsonNode args) {
         return decisions.decide(requestService.create(userId, requestInput(args)).id());
+    }
+
+    private static String urgencyName(Urgency urgency) {
+        return switch (urgency) {
+            case LOW -> "不紧急";
+            case NORMAL -> "一般";
+            case HIGH -> "较紧急";
+            case CRITICAL -> "非常紧急";
+        };
     }
 
     private CreateSupplyRequest requestInput(JsonNode args) {
