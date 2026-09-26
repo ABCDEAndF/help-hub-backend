@@ -5,6 +5,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import java.util.List;
 import org.isolatedareas.helphub.api.IdempotencyService;
+import org.isolatedareas.helphub.api.IdempotencyKeys;
 import org.isolatedareas.helphub.auth.CurrentUser;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -41,10 +42,11 @@ public class InventoryController {
     ReservationService.ReservationReceipt reserve(
         @AuthenticationPrincipal Jwt jwt,
         @RequestHeader(value = "Idempotency-Key", required = false) String key,
+        @RequestHeader(value = "X-Idempotency-Key", required = false) String cloudRunKey,
         @Valid @RequestBody ReservationService.ReserveInput input
     ) {
         long userId = CurrentUser.id(jwt);
-        return idempotency.execute(key, userId, "CREATE_RESERVATION", input,
+        return idempotency.execute(IdempotencyKeys.resolve(key, cloudRunKey), userId, "CREATE_RESERVATION", input,
             ReservationService.ReservationReceipt.class, () -> reservations.reserve(userId, input));
     }
 

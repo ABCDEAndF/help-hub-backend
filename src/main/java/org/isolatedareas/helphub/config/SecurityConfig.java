@@ -66,7 +66,8 @@ public class SecurityConfig {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOriginPatterns(allowedOriginPatterns);
         configuration.setAllowedMethods(java.util.List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(java.util.List.of("Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"));
+        configuration.setAllowedHeaders(java.util.List.of(
+            "Authorization", "Content-Type", "Idempotency-Key", "X-Idempotency-Key", "X-Request-ID"));
         configuration.setExposedHeaders(java.util.List.of(
             "X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining"));
         configuration.setAllowCredentials(true);

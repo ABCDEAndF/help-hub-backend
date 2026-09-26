@@ -3,6 +3,7 @@ package org.isolatedareas.helphub.requests;
 import jakarta.validation.Valid;
 import java.util.List;
 import org.isolatedareas.helphub.api.IdempotencyService;
+import org.isolatedareas.helphub.api.IdempotencyKeys;
 import org.isolatedareas.helphub.auth.CurrentUser;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -32,9 +33,11 @@ public class ResidentRequestController {
     @PostMapping
     SupplyRequestView create(@AuthenticationPrincipal Jwt jwt,
                              @RequestHeader(value = "Idempotency-Key", required = false) String key,
+                             @RequestHeader(value = "X-Idempotency-Key", required = false) String cloudRunKey,
                              @Valid @RequestBody CreateSupplyRequest input) {
         long userId = CurrentUser.id(jwt);
-        return idempotency.execute(key, userId, "CREATE_SUPPLY_REQUEST", input, SupplyRequestView.class,
+        return idempotency.execute(IdempotencyKeys.resolve(key, cloudRunKey), userId,
+            "CREATE_SUPPLY_REQUEST", input, SupplyRequestView.class,
             () -> service.create(userId, input));
     }
 
