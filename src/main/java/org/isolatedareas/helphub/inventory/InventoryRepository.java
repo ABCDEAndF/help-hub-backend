@@ -20,8 +20,11 @@ public class InventoryRepository {
         this.jdbc = jdbc;
     }
 
+    /** In pinyin order, so residents can browse and jump by initial letter. */
     public List<InventoryItemView> list() {
-        return jdbc.sql(SELECT + " ORDER BY i.category, i.name").query(mapper()).list();
+        return jdbc.sql(SELECT + " ORDER BY i.service_point_id").query(mapper()).list().stream()
+            .sorted(java.util.Comparator.comparing(InventoryItemView::name, PinyinIndex.ORDER))
+            .toList();
     }
 
     public Optional<InventoryItemView> find(long id) {
