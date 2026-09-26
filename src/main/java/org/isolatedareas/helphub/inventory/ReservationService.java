@@ -154,6 +154,33 @@ public class ReservationService {
             hash(pickupCode).getBytes(StandardCharsets.UTF_8))) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Invalid pickup code");
         }
+        completeCollection(operatorId, row);
+    }
+
+    /**
+     * Hands over a reservation delivered by a simulated cart. There is no driver to check a
+     * pickup code, so arrival itself completes the handover; only the dispatcher calls this.
+     * Returns false when the reservation is no longer collectible (expired or already handed over).
+     */
+    @Transactional
+    public boolean collectOnDelivery(long actorId, long reservationId) {
+        ReservationRow row = jdbc.sql("""
+                SELECT r.id, r.resident_id, r.inventory_item_id, r.quantity, r.pickup_code_hash, r.status,
+                  i.unit_price_fen
+                FROM reservations r JOIN inventory_items i ON i.id=r.inventory_item_id
+                WHERE r.id=:id FOR UPDATE
+                """)
+            .param("id", reservationId)
+            .query((rs, n) -> new ReservationRow(rs.getLong("id"), rs.getLong("resident_id"),
+                rs.getLong("inventory_item_id"), rs.getInt("quantity"), rs.getString("pickup_code_hash"),
+                rs.getString("status"), rs.getInt("unit_price_fen"))).optional().orElse(null);
+        if (row == null || (!"HELD".equals(row.status()) && !"CONFIRMED".equals(row.status()))) return false;
+        completeCollection(actorId, row);
+        return true;
+    }
+
+    private void completeCollection(long operatorId, ReservationRow row) {
+        long reservationId = row.id();
         inventory.collect(row.inventoryItemId(), row.quantity());
         jdbc.sql("UPDATE reservations SET status='COLLECTED' WHERE id=:id")
             .param("id", reservationId).update();

@@ -4,10 +4,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.Date;
 import java.time.LocalDate;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.isolatedareas.helphub.audit.AuditService;
+import org.isolatedareas.helphub.automation.CartTripService;
 import org.isolatedareas.helphub.events.OutboxService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,9 +22,11 @@ public class RoutePlanningService {
     private final OutboxService outbox;
     private final AuditService audit;
     private final ObjectMapper json;
-    private final RoutePlanningAlgorithm algorithm = new RoutePlanningAlgorithm();
+    private final CartTripService trips;
 
-    public RoutePlanningService(JdbcClient jdbc, OutboxService outbox, AuditService audit, ObjectMapper json) {
+    public RoutePlanningService(JdbcClient jdbc, OutboxService outbox, AuditService audit, ObjectMapper json,
+                                CartTripService trips) {
+        this.trips = trips;
         this.jdbc = jdbc;
         this.outbox = outbox;
         this.audit = audit;
@@ -52,53 +54,15 @@ public class RoutePlanningService {
                 """).param("id", routePlanId).update();
         if (claimed == 0) return;
         try {
-            List<RoutePlanningAlgorithm.CartInput> carts = jdbc.sql("""
-                    SELECT id, capacity_units, latitude, longitude FROM mobile_carts
-                    WHERE status='AVAILABLE' AND latitude IS NOT NULL AND longitude IS NOT NULL ORDER BY id
-                    """)
-                .query((rs, n) -> new RoutePlanningAlgorithm.CartInput(rs.getLong("id"),
-                    rs.getInt("capacity_units"), rs.getDouble("latitude"), rs.getDouble("longitude"))).list();
-            // Pickup requests are collected at a service point and never join a cart route.
-            Map<Long, Long> residents = new HashMap<>();
-            List<RoutePlanningAlgorithm.StopInput> requests = jdbc.sql("""
-                    SELECT id, resident_id, quantity, urgency, latitude, longitude FROM supply_requests
-                    WHERE status='APPROVED' AND fulfillment_method='DELIVERY' ORDER BY created_at
-                    """)
-                .query((rs, n) -> {
-                    residents.put(rs.getLong("id"), rs.getLong("resident_id"));
-                    return new RoutePlanningAlgorithm.StopInput(rs.getLong("id"),
-                        rs.getInt("quantity"), rs.getString("urgency"), rs.getDouble("latitude"),
-                        rs.getDouble("longitude"));
-                }).list();
-            RoutePlanningAlgorithm.PlanningResult result = algorithm.plan(carts, requests);
-            for (RoutePlanningAlgorithm.CartRoute route : result.routes()) {
-                for (RoutePlanningAlgorithm.PlannedStop stop : route.stops()) {
-                    jdbc.sql("""
-                            INSERT INTO route_stops
-                              (route_plan_id, cart_id, request_id, stop_order, latitude, longitude, demand_units)
-                            VALUES (:planId, :cartId, :requestId, :stopOrder, :latitude, :longitude, :demand)
-                            """)
-                        .param("planId", routePlanId).param("cartId", route.cartId())
-                        .param("requestId", stop.requestId()).param("stopOrder", stop.sequence())
-                        .param("latitude", stop.latitude()).param("longitude", stop.longitude())
-                        .param("demand", stop.demandUnits()).update();
-                    int scheduled = jdbc.sql("""
-                            UPDATE supply_requests SET status='SCHEDULED', assigned_cart_id=:cartId, version=version+1
-                            WHERE id=:requestId AND status='APPROVED'
-                            """).param("cartId", route.cartId()).param("requestId", stop.requestId()).update();
-                    if (scheduled == 1) {
-                        outbox.append("SUPPLY_REQUEST", stop.requestId(), "SupplyRequestStatusChanged", "notification.send",
-                            Map.of("eventId", "request-status-" + stop.requestId() + "-SCHEDULED", "requestId", stop.requestId(),
-                                "recipientUserId", residents.get(stop.requestId()), "template", "REQUEST_SCHEDULED"));
-                    }
-                }
-            }
+            // Every dispatch — the operator's "生成今日路线" or the automatic dispatcher — is computed here,
+            // asynchronously from RabbitMQ, and immediately starts simulated cart trips.
+            CartTripService.PlanOutcome result = trips.planTrips(routePlanId);
             jdbc.sql("""
                     UPDATE route_plans SET status='READY', objective_distance_meters=:distance,
                       baseline_distance_meters=:baseline, completed_at=CURRENT_TIMESTAMP(3) WHERE id=:id
                     """)
-                .param("distance", result.totalDistanceMeters())
-                .param("baseline", result.baselineDistanceMeters())
+                .param("distance", result.distanceMeters())
+                .param("baseline", result.baselineMeters())
                 .param("id", routePlanId).update();
             outbox.append("ROUTE_PLAN", routePlanId, "RoutePlanReady", "notification.send",
                 Map.of("eventId", "route-ready-" + routePlanId, "recipientRole", "OPERATOR",

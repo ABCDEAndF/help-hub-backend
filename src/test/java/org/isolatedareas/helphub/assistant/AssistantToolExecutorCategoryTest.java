@@ -23,7 +23,7 @@ class AssistantToolExecutorCategoryTest {
     void setUp() {
         inventory = mock(InventoryRepository.class);
         when(inventory.list()).thenReturn(List.of(item(1, "FOOD"), item(2, "WATER"), item(3, "MEDICAL")));
-        executor = new AssistantToolExecutor(inventory, null, null, null, null, null, null);
+        executor = new AssistantToolExecutor(inventory, null, null, null, null, null, null, null);
     }
 
     @Test

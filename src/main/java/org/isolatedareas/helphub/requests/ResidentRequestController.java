@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import java.util.List;
 import org.isolatedareas.helphub.api.IdempotencyService;
 import org.isolatedareas.helphub.api.IdempotencyKeys;
+import org.isolatedareas.helphub.automation.AutoDecisionService;
 import org.isolatedareas.helphub.auth.CurrentUser;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -22,12 +23,14 @@ public class ResidentRequestController {
     private final RequestService service;
     private final SupplyRequestRepository requests;
     private final IdempotencyService idempotency;
+    private final AutoDecisionService decisions;
 
     public ResidentRequestController(RequestService service, SupplyRequestRepository requests,
-                                     IdempotencyService idempotency) {
+                                     IdempotencyService idempotency, AutoDecisionService decisions) {
         this.service = service;
         this.requests = requests;
         this.idempotency = idempotency;
+        this.decisions = decisions;
     }
 
     @PostMapping
@@ -39,7 +42,7 @@ public class ResidentRequestController {
         long userId = CurrentUser.id(jwt);
         return idempotency.execute(IdempotencyKeys.resolve(key, cloudRunKey, queryKey), userId,
             "CREATE_SUPPLY_REQUEST", input, SupplyRequestView.class,
-            () -> service.create(userId, input));
+            () -> decisions.decide(service.create(userId, input).id()));
     }
 
     @GetMapping

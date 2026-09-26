@@ -64,7 +64,7 @@ class IdempotencyMysqlIntegrationTest {
 
         var requests = new SupplyRequestRepository(jdbc);
         long pickupId = requests.insert(userId, new CreateSupplyRequest("FOOD", "大米", 1, Urgency.NORMAL,
-            new BigDecimal("31.15"), new BigDecimal("121.12"), null, null, null, null, FulfillmentMethod.PICKUP));
+            new BigDecimal("31.15"), new BigDecimal("121.12"), null, null, null, null, FulfillmentMethod.PICKUP, null));
         long pointId = jdbc.sql("SELECT MIN(id) FROM service_points").query(Long.class).single();
         jdbc.sql("UPDATE supply_requests SET assigned_service_point_id=:point WHERE id=:id")
             .param("point", pointId).param("id", pickupId).update();

@@ -29,8 +29,8 @@ class AssistantFallbackResponseTest {
 
     @Test
     void rendersResidentRequestStatusInPlainChinese() {
-        var request = new SupplyRequestView(17, 3, "居民", "FOOD", "大米", 2, Urgency.NORMAL,
-            FulfillmentMethod.PICKUP, RequestStatus.APPROVED, BigDecimal.ONE, BigDecimal.ONE, "青浦", null, null, null,
+        var request = new SupplyRequestView(17, 3, "居民", "FOOD", null, "大米", 2, Urgency.NORMAL,
+            FulfillmentMethod.PICKUP, RequestStatus.APPROVED, BigDecimal.ONE, BigDecimal.ONE, "青浦", null, null, null, null,
             1L, null, "邻需通·夏阳公益服务点", null, Instant.EPOCH, Instant.EPOCH);
 
         assertThat(AssistantService.describeRequest(request))

@@ -28,6 +28,13 @@ public class RequestService {
 
     @Transactional
     public SupplyRequestView create(long residentId, CreateSupplyRequest input) {
+        if (input.inventoryItemId() != null) {
+            // A request for a stocked item always takes that item's category, whatever the client sent.
+            String category = jdbc.sql("SELECT category FROM inventory_items WHERE id=:id")
+                .param("id", input.inventoryItemId()).query(String.class).optional()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Inventory item not found"));
+            input = input.withCategory(category);
+        }
         long id = requests.insert(residentId, input);
         SupplyRequestView created = get(id);
         audit.record(residentId, "REQUEST_CREATED", "SUPPLY_REQUEST", id, null, created);
@@ -44,6 +51,12 @@ public class RequestService {
 
     @Transactional
     public SupplyRequestView transition(long id, long actorId, TransitionRequest input) {
+        return transition(id, actorId, input, true);
+    }
+
+    /** notifyResident=false is for intermediate automatic steps the resident need not hear about. */
+    @Transactional
+    public SupplyRequestView transition(long id, long actorId, TransitionRequest input, boolean notifyResident) {
         SupplyRequestView before = get(id);
         if (!isAllowed(before.status(), input.status())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -72,9 +85,11 @@ public class RequestService {
         }
         SupplyRequestView after = get(id);
         audit.record(actorId, "REQUEST_STATUS_CHANGED", "SUPPLY_REQUEST", id, before, after);
-        outbox.append("SUPPLY_REQUEST", id, "SupplyRequestStatusChanged", "notification.send",
-            Map.of("eventId", "request-status-" + id + "-" + input.status(), "requestId", id,
-                "recipientUserId", before.residentId(), "template", "REQUEST_" + input.status()));
+        if (notifyResident) {
+            outbox.append("SUPPLY_REQUEST", id, "SupplyRequestStatusChanged", "notification.send",
+                Map.of("eventId", "request-status-" + id + "-" + input.status(), "requestId", id,
+                    "recipientUserId", before.residentId(), "template", "REQUEST_" + input.status()));
+        }
         if (input.status() == RequestStatus.FULFILLED) {
             jdbc.sql("""
                     INSERT INTO impact_events (event_type, resident_id, request_id, metadata)

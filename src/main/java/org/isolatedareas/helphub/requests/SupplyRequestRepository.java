@@ -14,9 +14,9 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class SupplyRequestRepository {
     private static final String SELECT = """
-        SELECT r.id, r.resident_id, u.display_name AS resident_name, r.category,
+        SELECT r.id, r.resident_id, u.display_name AS resident_name, r.category, r.inventory_item_id,
           r.item_description, r.quantity, r.urgency, r.fulfillment_method, r.status, r.latitude, r.longitude,
-          r.approximate_address, r.accessibility_notes, r.preferred_start, r.preferred_end,
+          r.approximate_address, r.accessibility_notes, r.decision_note, r.preferred_start, r.preferred_end,
           r.assigned_service_point_id, r.assigned_cart_id, sp.name AS assigned_service_point_name,
           mc.name AS assigned_cart_name, r.created_at, r.updated_at
         FROM supply_requests r JOIN users u ON u.id = r.resident_id
@@ -33,14 +33,15 @@ public class SupplyRequestRepository {
         org.springframework.jdbc.support.GeneratedKeyHolder keys = new org.springframework.jdbc.support.GeneratedKeyHolder();
         jdbc.sql("""
                 INSERT INTO supply_requests
-                  (resident_id, category, item_description, quantity, urgency, fulfillment_method,
+                  (resident_id, category, inventory_item_id, item_description, quantity, urgency, fulfillment_method,
                    latitude, longitude, approximate_address, accessibility_notes, preferred_start, preferred_end)
                 VALUES
-                  (:residentId, :category, :description, :quantity, :urgency, :fulfillmentMethod,
+                  (:residentId, :category, :inventoryItemId, :description, :quantity, :urgency, :fulfillmentMethod,
                    :latitude, :longitude, :address, :notes, :preferredStart, :preferredEnd)
                 """)
             .param("residentId", residentId)
             .param("category", input.category())
+            .param("inventoryItemId", input.inventoryItemId())
             .param("description", input.itemDescription())
             .param("quantity", input.quantity())
             .param("urgency", input.urgency().name())
@@ -103,6 +104,11 @@ public class SupplyRequestRepository {
             .update();
     }
 
+    public void recordDecision(long id, String note) {
+        jdbc.sql("UPDATE supply_requests SET decision_note=:note WHERE id=:id")
+            .param("note", note).param("id", id).update();
+    }
+
     public long version(long id) {
         return jdbc.sql("SELECT version FROM supply_requests WHERE id=:id")
             .param("id", id).query(Long.class).optional().orElseThrow();
@@ -111,11 +117,12 @@ public class SupplyRequestRepository {
     private RowMapper<SupplyRequestView> mapper() {
         return (rs, rowNum) -> new SupplyRequestView(
             rs.getLong("id"), rs.getLong("resident_id"), rs.getString("resident_name"),
-            rs.getString("category"), rs.getString("item_description"), rs.getInt("quantity"),
+            rs.getString("category"), nullableLong(rs, "inventory_item_id"), rs.getString("item_description"),
+            rs.getInt("quantity"),
             Urgency.valueOf(rs.getString("urgency")), FulfillmentMethod.valueOf(rs.getString("fulfillment_method")),
             RequestStatus.valueOf(rs.getString("status")),
             rs.getBigDecimal("latitude"), rs.getBigDecimal("longitude"), rs.getString("approximate_address"),
-            rs.getString("accessibility_notes"), instant(rs.getTimestamp("preferred_start")),
+            rs.getString("accessibility_notes"), rs.getString("decision_note"), instant(rs.getTimestamp("preferred_start")),
             instant(rs.getTimestamp("preferred_end")), nullableLong(rs, "assigned_service_point_id"),
             nullableLong(rs, "assigned_cart_id"), rs.getString("assigned_service_point_name"),
             rs.getString("assigned_cart_name"), rs.getTimestamp("created_at").toInstant(),

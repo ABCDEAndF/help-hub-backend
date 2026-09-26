@@ -9,6 +9,7 @@ import java.time.LocalTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.isolatedareas.helphub.automation.AutoDecisionService;
 import org.isolatedareas.helphub.domain.FulfillmentMethod;
 import org.isolatedareas.helphub.domain.RequestStatus;
 import org.isolatedareas.helphub.domain.Urgency;
@@ -32,11 +33,13 @@ public class AssistantToolExecutor {
     private final JdbcClient jdbc;
     private final ConfirmationService confirmations;
     private final Validator validator;
+    private final AutoDecisionService decisions;
 
     public AssistantToolExecutor(InventoryRepository inventory, SupplyRequestRepository requests,
                                  RequestService requestService, ReservationService reservations,
                                  JdbcClient jdbc, ConfirmationService confirmations,
-                                 Validator validator) {
+                                 Validator validator, AutoDecisionService decisions) {
+        this.decisions = decisions;
         this.inventory = inventory;
         this.requests = requests;
         this.requestService = requestService;
@@ -104,7 +107,7 @@ public class AssistantToolExecutor {
     }
 
     private Object createRequest(long userId, JsonNode args) {
-        return requestService.create(userId, requestInput(args));
+        return decisions.decide(requestService.create(userId, requestInput(args)).id());
     }
 
     private CreateSupplyRequest requestInput(JsonNode args) {
@@ -115,7 +118,9 @@ public class AssistantToolExecutor {
             nullableText(args, "approximateAddress"), nullableText(args, "accessibilityNotes"),
             nullableInstant(args, "preferredStart"), nullableInstant(args, "preferredEnd"),
             args.hasNonNull("fulfillmentMethod")
-                ? FulfillmentMethod.valueOf(args.path("fulfillmentMethod").asText().toUpperCase()) : null));
+                ? FulfillmentMethod.valueOf(args.path("fulfillmentMethod").asText().toUpperCase()) : null,
+            args.hasNonNull("inventoryItemId") && args.path("inventoryItemId").canConvertToLong()
+                ? args.path("inventoryItemId").asLong() : null));
     }
 
     private ReservationService.ReserveInput reservationInput(JsonNode args) {

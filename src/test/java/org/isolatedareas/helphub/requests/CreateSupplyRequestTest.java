@@ -15,7 +15,7 @@ class CreateSupplyRequestTest {
         Instant start = Instant.parse("2026-09-06T10:00:00Z");
         assertThatThrownBy(() -> new CreateSupplyRequest("FOOD", "大米", 1, Urgency.NORMAL,
             new BigDecimal("31.23"), new BigDecimal("121.47"), null, null,
-            start, start.minusSeconds(60), FulfillmentMethod.PICKUP))
+            start, start.minusSeconds(60), FulfillmentMethod.PICKUP, null))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("preferredEnd");
     }

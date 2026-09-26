@@ -8,6 +8,8 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.util.List;
+import java.util.Map;
+import org.isolatedareas.helphub.automation.CartTripService;
 import org.isolatedareas.helphub.auth.CurrentUser;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -28,9 +30,12 @@ public class ServicePointController {
     private final JdbcClient jdbc;
     private final StringRedisTemplate redis;
 
-    public ServicePointController(JdbcClient jdbc, StringRedisTemplate redis) {
+    private final CartTripService trips;
+
+    public ServicePointController(JdbcClient jdbc, StringRedisTemplate redis, CartTripService trips) {
         this.jdbc = jdbc;
         this.redis = redis;
+        this.trips = trips;
     }
 
     @GetMapping("/resident/service-points")
@@ -58,6 +63,8 @@ public class ServicePointController {
 
     @GetMapping("/resident/carts")
     List<CartView> carts() {
+        Instant now = Instant.now();
+        Map<Long, CartTripService.CartMotion> motions = trips.motions(now);
         return jdbc.sql("""
                 SELECT id, code, name, capacity_units, status, latitude, longitude, last_location_at
                 FROM mobile_carts WHERE status IN ('AVAILABLE','LOADING','IN_SERVICE') ORDER BY name
@@ -77,8 +84,16 @@ public class ServicePointController {
                         observedAt = Instant.ofEpochMilli(Long.parseLong(parts[2]));
                     }
                 }
+                CartTripService.CartMotion motion = motions.get(id);
+                if (motion != null) {
+                    // A cart on a simulated trip is wherever its plan puts it right now.
+                    return new CartView(id, rs.getString("code"), rs.getString("name"), rs.getInt("capacity_units"),
+                        rs.getString("status"), BigDecimal.valueOf(motion.latitude()), BigDecimal.valueOf(motion.longitude()),
+                        now, true, motion.statusText(), motion.path());
+                }
                 return new CartView(id, rs.getString("code"), rs.getString("name"),
-                    rs.getInt("capacity_units"), rs.getString("status"), latitude, longitude, observedAt);
+                    rs.getInt("capacity_units"), rs.getString("status"), latitude, longitude, observedAt,
+                    false, "待命", List.of());
             }).list();
     }
 
@@ -121,7 +136,8 @@ public class ServicePointController {
     }
 
     public record CartView(long id, String code, String name, int capacityUnits, String status,
-                           BigDecimal latitude, BigDecimal longitude, Instant observedAt) {
+                           BigDecimal latitude, BigDecimal longitude, Instant observedAt,
+                           boolean moving, String statusText, List<double[]> path) {
     }
 
     public record LocationUpdate(

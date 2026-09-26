@@ -98,6 +98,8 @@ public class OpenAiCompatibleClient {
         requestProperties.set("longitude", numberProperty("经度"));
         requestProperties.set("approximateAddress", stringProperty("大致地址"));
         requestProperties.set("accessibilityNotes", stringProperty("行动不便等说明"));
+        requestProperties.set("inventoryItemId", integerProperty(
+            "所需物资对应的库存编号（来自 check_inventory 结果的 id）；库存中有该物资时务必填写，系统会据此自动审批"));
         requestProperties.set("fulfillmentMethod", enumProperty("领取方式：PICKUP 到服务点自取，DELIVERY 补给车配送",
             java.util.List.of("PICKUP", "DELIVERY")));
         tools.add(tool("prepare_supply_request",

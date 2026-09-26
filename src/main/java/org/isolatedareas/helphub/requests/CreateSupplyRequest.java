@@ -23,7 +23,8 @@ public record CreateSupplyRequest(
     @Size(max = 500) String accessibilityNotes,
     Instant preferredStart,
     Instant preferredEnd,
-    FulfillmentMethod fulfillmentMethod
+    FulfillmentMethod fulfillmentMethod,
+    Long inventoryItemId
 ) {
     public CreateSupplyRequest {
         if (preferredStart != null && preferredEnd != null && !preferredEnd.isAfter(preferredStart)) {
@@ -31,6 +32,11 @@ public record CreateSupplyRequest(
         }
         // Mini program 1.0.0 predates the choice and every request it sent was routed to a cart.
         if (fulfillmentMethod == null) fulfillmentMethod = FulfillmentMethod.DELIVERY;
+    }
+
+    public CreateSupplyRequest withCategory(String newCategory) {
+        return new CreateSupplyRequest(newCategory, itemDescription, quantity, urgency, latitude, longitude,
+            approximateAddress, accessibilityNotes, preferredStart, preferredEnd, fulfillmentMethod, inventoryItemId);
     }
 }
 
