@@ -203,6 +203,16 @@ class AutomationMysqlIntegrationTest {
         SupplyRequestView first = tx.execute(s -> requestService.create(neighbour, request(null, 1, FulfillmentMethod.PICKUP)));
         assertThat(first.residentNumber()).isEqualTo(1);
         assertThat(first.id()).isGreaterThan(1);
+
+        // Staff accounts: stored as BCrypt hashes, resettable, never matching residents.
+        var users = new org.isolatedareas.helphub.auth.UserRepository(jdbc);
+        var courierAccount = users.upsertStaff("kd001", "快递员1", "$2a$10$abcdefghijklmnopqrstuuJ4O3n2m1l0k9j8i7h6g5f4e3d2c1b0a");
+        assertThat(courierAccount.role().name()).isEqualTo("OPERATOR");
+        assertThat(users.staffPasswordHash("kd001")).hasValueSatisfying(hash -> assertThat(hash).startsWith("$2a$"));
+        assertThat(users.upsertStaff("kd001", "快递员一号", "$2a$10$reset").displayName()).isEqualTo("快递员一号");
+        assertThat(users.staffPasswordHash("kd001")).contains("$2a$10$reset");
+        assertThat(users.staff()).extracting(org.isolatedareas.helphub.auth.UserAccount::phone).contains("kd001");
+        assertThat(users.staffPasswordHash("it-resident")).isEmpty();
     }
 
     private static long itemId(JdbcClient jdbc, String sku) {

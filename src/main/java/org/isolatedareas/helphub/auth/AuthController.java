@@ -23,6 +23,9 @@ public class AuthController {
     private final boolean devLoginEnabled;
     private final String expectedWechatAppId;
     private final String expectedCloudEnv;
+    static final org.springframework.security.crypto.password.PasswordEncoder PASSWORDS =
+        new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder();
+    private static final String DUMMY_HASH = PASSWORDS.encode("no-such-account-" + java.util.UUID.randomUUID());
     private final String operatorPhone;
     private final String operatorPassword;
 
@@ -67,20 +70,25 @@ public class AuthController {
 
     @PostMapping("/operator-login")
     JwtService.TokenResponse operatorLogin(@Valid @RequestBody OperatorLoginRequest request) {
-        if (operatorPhone.isBlank() || operatorPassword.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                "Operator login is not configured");
+        String account = request.phone().trim();
+        boolean configuredAdmin = !operatorPhone.isBlank() && MessageDigest.isEqual(
+            operatorPhone.getBytes(StandardCharsets.UTF_8), account.getBytes(StandardCharsets.UTF_8));
+        boolean authenticated;
+        if (configuredAdmin) {
+            authenticated = !operatorPassword.isBlank() && MessageDigest.isEqual(
+                operatorPassword.getBytes(StandardCharsets.UTF_8), request.password().getBytes(StandardCharsets.UTF_8));
+        } else {
+            // Staff accounts created through the admin API. A dummy hash keeps the timing of
+            // unknown accounts the same as wrong passwords.
+            String hash = users.staffPasswordHash(account).orElse(DUMMY_HASH);
+            authenticated = PASSWORDS.matches(request.password(), hash) && !DUMMY_HASH.equals(hash);
         }
-        boolean phoneMatches = MessageDigest.isEqual(operatorPhone.getBytes(StandardCharsets.UTF_8),
-            request.phone().trim().getBytes(StandardCharsets.UTF_8));
-        boolean passwordMatches = MessageDigest.isEqual(operatorPassword.getBytes(StandardCharsets.UTF_8),
-            request.password().getBytes(StandardCharsets.UTF_8));
-        if (!phoneMatches || !passwordMatches) {
+        if (!authenticated) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid operator credentials");
         }
-        UserAccount user = users.findByPhone(operatorPhone)
+        UserAccount user = users.findByPhone(account)
             .filter(UserAccount::enabled)
-            .filter(account -> account.role() == Role.OPERATOR || account.role() == Role.ADMIN)
+            .filter(staff -> staff.role() == Role.OPERATOR || staff.role() == Role.ADMIN)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                 "Operator account is unavailable"));
         return tokens.issue(user);

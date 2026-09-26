@@ -31,6 +31,25 @@ class OperatorLoginTest {
     }
 
     @Test
+    void staffSignInWithTheirOwnPasswordHash() {
+        var courier = new UserAccount(7, "kd001", "快递员1", Role.OPERATOR, true);
+        var token = new JwtService.TokenResponse("courier-token", Instant.EPOCH, 7, "快递员1", "OPERATOR");
+        when(users.staffPasswordHash("kd001")).thenReturn(Optional.of(AuthController.PASSWORDS.encode("Courier-pass-2026")));
+        when(users.findByPhone("kd001")).thenReturn(Optional.of(courier));
+        when(tokens.issue(courier)).thenReturn(token);
+
+        assertThat(controller.operatorLogin(new AuthController.OperatorLoginRequest(" kd001 ", "Courier-pass-2026")))
+            .isEqualTo(token);
+        assertThatThrownBy(() -> controller.operatorLogin(new AuthController.OperatorLoginRequest("kd001", "wrong")))
+            .isInstanceOfSatisfying(ResponseStatusException.class,
+                error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED));
+        when(users.staffPasswordHash("kd999")).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> controller.operatorLogin(new AuthController.OperatorLoginRequest("kd999", "Courier-pass-2026")))
+            .isInstanceOfSatisfying(ResponseStatusException.class,
+                error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED));
+    }
+
+    @Test
     void rejectsWrongPasswordAndResidentRole() {
         assertThatThrownBy(() -> controller.operatorLogin(
             new AuthController.OperatorLoginRequest("13800000000", "wrong")))
