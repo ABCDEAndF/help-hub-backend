@@ -15,6 +15,8 @@ import org.isolatedareas.helphub.domain.RequestStatus;
 import org.isolatedareas.helphub.domain.Urgency;
 import org.isolatedareas.helphub.events.OutboxService;
 import org.isolatedareas.helphub.inventory.InventoryRepository;
+import org.isolatedareas.helphub.inventory.ReservationCollected;
+import org.isolatedareas.helphub.inventory.ReservationExpired;
 import org.isolatedareas.helphub.inventory.ReservationService;
 import org.isolatedareas.helphub.requests.CreateSupplyRequest;
 import org.isolatedareas.helphub.requests.RequestService;
@@ -52,10 +54,16 @@ class AutomationMysqlIntegrationTest {
         var outbox = new OutboxService(jdbc, json);
         var requests = new SupplyRequestRepository(jdbc);
         var requestService = new RequestService(requests, outbox, audit, jdbc);
-        var reservations = new ReservationService(jdbc, new InventoryRepository(jdbc), requests,
-            mock(StringRedisTemplate.class, RETURNS_DEEP_STUBS), outbox, audit, mock(ApplicationEventPublisher.class),
-            "integration-test-pickup-code-secret-0123456789");
         var system = new SystemActor(jdbc);
+        var lifecycle = new RequestLifecycleListener(requestService, requests, system, jdbc);
+        // Delivers the events Spring would, so handover and expiry close requests as in production.
+        ApplicationEventPublisher publisher = event -> {
+            if (event instanceof ReservationCollected collected) lifecycle.onCollected(collected);
+            if (event instanceof ReservationExpired expired) lifecycle.onExpired(expired);
+        };
+        var reservations = new ReservationService(jdbc, new InventoryRepository(jdbc), requests,
+            mock(StringRedisTemplate.class, RETURNS_DEEP_STUBS), outbox, audit, publisher,
+            "integration-test-pickup-code-secret-0123456789");
         var decisions = new AutoDecisionService(jdbc, requests, requestService, reservations, system);
         var trips = new CartTripService(jdbc, requestService, requests, reservations, system);
         var tx = new TransactionTemplate(new DataSourceTransactionManager(ds));
@@ -80,6 +88,7 @@ class AutomationMysqlIntegrationTest {
         SupplyRequestView pickup = tx.execute(s -> decisions.decide(requestService.create(resident,
             request(xiayangRice, 2, FulfillmentMethod.PICKUP)).id()));
         assertThat(pickup.status()).isEqualTo(RequestStatus.SCHEDULED);
+        assertThat(pickup.residentNumber()).isEqualTo(1);
         assertThat(pickup.category()).isEqualTo("FOOD");
         assertThat(pickup.assignedServicePointName()).isEqualTo("邻需通·青浦工业园区公益服务点");
         assertThat(pickup.decisionNote()).startsWith("已自动批准").contains("09:00–17:00");
@@ -89,6 +98,7 @@ class AutomationMysqlIntegrationTest {
         SupplyRequestView tooMany = tx.execute(s -> decisions.decide(requestService.create(resident,
             request(torch, 100, FulfillmentMethod.PICKUP)).id()));
         assertThat(tooMany.status()).isEqualTo(RequestStatus.REJECTED);
+        assertThat(tooMany.residentNumber()).isEqualTo(2);
         assertThat(tooMany.decisionNote()).contains("库存不足", "25套");
 
         // Not a stocked item: left for an operator.
@@ -147,6 +157,39 @@ class AutomationMysqlIntegrationTest {
         assertThat(industrialRiceReserved.get()).isZero();
         assertThat(jdbc.sql("SELECT status FROM reservations WHERE request_id=:id").param("id", pickup.id())
             .query(String.class).single()).isEqualTo("CANCELLED");
+
+        // Staff verifying the pickup code completes the request; nobody has to mark it done.
+        SupplyRequestView torchPickup = tx.execute(s -> decisions.decide(requestService.create(resident,
+            request(torch, 1, FulfillmentMethod.PICKUP)).id()));
+        var torchReservation = reservations.list(resident).stream()
+            .filter(item -> item.requestId() == torchPickup.id()).findFirst().orElseThrow();
+        assertThat(torchReservation.requestNumber()).isEqualTo(torchPickup.residentNumber());
+        var handover = tx.execute(s -> reservations.collectByCode(system.id(), torchReservation.pickupCode()));
+        assertThat(handover.itemName()).isEqualTo("应急手电筒与电池包");
+        assertThat(handover.quantity()).isEqualTo(1);
+        assertThat(handover.requestNumber()).isEqualTo(torchPickup.residentNumber());
+        SupplyRequestView collected = requestService.get(torchPickup.id());
+        assertThat(collected.status()).isEqualTo(RequestStatus.FULFILLED);
+        assertThat(collected.decisionNote()).contains("领取", "已完成");
+
+        // A pickup code left unused past its hold cancels the request and frees the stock.
+        SupplyRequestView forgotten = tx.execute(s -> decisions.decide(requestService.create(resident,
+            request(industrialRice, 1, FulfillmentMethod.PICKUP)).id()));
+        assertThat(industrialRiceReserved.get()).isEqualTo(1);
+        jdbc.sql("UPDATE reservations SET expires_at = CURRENT_TIMESTAMP(3) - INTERVAL 1 MINUTE WHERE request_id=:id")
+            .param("id", forgotten.id()).update();
+        tx.executeWithoutResult(s -> reservations.expireHolds());
+        SupplyRequestView lapsed = requestService.get(forgotten.id());
+        assertThat(lapsed.status()).isEqualTo(RequestStatus.CANCELLED);
+        assertThat(lapsed.decisionNote()).contains("48 小时");
+        assertThat(industrialRiceReserved.get()).isZero();
+
+        // Every resident's own numbering starts at 1.
+        jdbc.sql("INSERT INTO users (wechat_open_id, display_name) VALUES ('it-neighbour', '邻居')").update();
+        long neighbour = jdbc.sql("SELECT id FROM users WHERE wechat_open_id='it-neighbour'").query(Long.class).single();
+        SupplyRequestView first = tx.execute(s -> requestService.create(neighbour, request(null, 1, FulfillmentMethod.PICKUP)));
+        assertThat(first.residentNumber()).isEqualTo(1);
+        assertThat(first.id()).isGreaterThan(1);
     }
 
     private static long itemId(JdbcClient jdbc, String sku) {

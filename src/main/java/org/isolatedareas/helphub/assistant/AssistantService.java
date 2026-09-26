@@ -72,7 +72,7 @@ public class AssistantService {
         if (input.confirmationToken() != null && !input.confirmationToken().isBlank()) {
             Object result = tools.confirm(userId, input.confirmationToken());
             String content = result instanceof SupplyRequestView request
-                ? "已提交申请 #" + request.id() + "。" + (request.decisionNote() == null ? "" : request.decisionNote())
+                ? "已提交申请 #" + request.residentNumber() + "。" + (request.decisionNote() == null ? "" : request.decisionNote())
                 : "操作已确认并完成。";
             saveMessage(conversationId, "USER", input.message(), null);
             saveMessage(conversationId, "ASSISTANT", content, null);
@@ -146,7 +146,7 @@ public class AssistantService {
     private static final String FLOW = """
         使用流程：
         ① 在“求助”页从现有物资中选择所需物资和数量，设置位置，并选择“到点自取”或“补给车配送”；
-        ② 系统立即自动审批：库存足够就批准，锁定离你最近且有货的服务点的物资，并发放预约编号和 6 位领取码（保留 48 小时）；库存不足会说明原因；
+        ② 系统立即自动审批：库存足够就批准，锁定离你最近且有货的服务点的物资，并发放 6 位领取码（保留 48 小时）；库存不足会说明原因；
         ③ 到点自取：在营业时间内到该服务点出示领取码；补给车配送：系统自动派最近的补给车先取货再送达，可在“进度”页查看车辆位置和预计到达时间；
         ④ 库存中没有的物资可选“其他需求”，会转人工处理。完成后可在“进度”页提交服务反馈。所有物资均为公益免费。""";
     private static final String HELP = "我可以直接查询：①“现在有哪些物资”“有大米吗” ②“服务点在哪、几点开门” "
@@ -258,7 +258,7 @@ public class AssistantService {
             case REJECTED -> "未通过";
             case CANCELLED -> "已取消";
         };
-        StringBuilder answer = new StringBuilder("申请 #" + request.id() + "：" + request.itemDescription() + "，数量 "
+        StringBuilder answer = new StringBuilder("申请 #" + request.residentNumber() + "：" + request.itemDescription() + "，数量 "
             + request.quantity() + "，当前状态：" + status + "。");
         if (request.decisionNote() != null) answer.append(request.decisionNote());
         if (request.fulfillmentMethod() != null) {
@@ -290,7 +290,7 @@ public class AssistantService {
         rows.stream().filter(ReservationService.ReservationView.class::isInstance)
             .map(ReservationService.ReservationView.class::cast)
             .forEach(reservation -> {
-                answer.append("• 预约 #").append(reservation.reservationId()).append("：").append(reservation.itemName())
+                answer.append("• 申请 #").append(reservation.requestNumber()).append("：").append(reservation.itemName())
                     .append(" × ").append(reservation.quantity()).append("，").append(reservationStatus(reservation.status()));
                 if (reservation.pickupCode() != null && ("HELD".equals(reservation.status())
                     || "CONFIRMED".equals(reservation.status()))) {
@@ -300,7 +300,7 @@ public class AssistantService {
                 }
                 answer.append("\n");
             });
-        answer.append("领取或配送送达时，请出示预约编号和领取码。");
+        answer.append("领取或配送送达时，请出示领取码。");
         return answer.toString();
     }
 

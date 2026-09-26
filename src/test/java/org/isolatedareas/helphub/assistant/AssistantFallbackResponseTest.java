@@ -29,13 +29,13 @@ class AssistantFallbackResponseTest {
 
     @Test
     void rendersResidentRequestStatusInPlainChinese() {
-        var request = new SupplyRequestView(17, 3, "居民", "FOOD", null, "大米", 2, Urgency.NORMAL,
+        var request = new SupplyRequestView(17, 3, 2, "居民", "FOOD", null, "大米", 2, Urgency.NORMAL,
             FulfillmentMethod.PICKUP, RequestStatus.APPROVED, BigDecimal.ONE, BigDecimal.ONE, "青浦", null, null, null, null,
             1L, null, "邻需通·夏阳公益服务点", null, Instant.EPOCH, Instant.EPOCH);
 
         assertThat(AssistantService.describeRequest(request))
-            .isEqualTo("申请 #17：大米，数量 2，当前状态：已批准，可以预约物资。领取方式：到点自取（邻需通·夏阳公益服务点）。");
-        assertThat(AssistantService.describeRequests(List.of(request))).contains("您最近的申请", "申请 #17");
+            .isEqualTo("申请 #2：大米，数量 2，当前状态：已批准，可以预约物资。领取方式：到点自取（邻需通·夏阳公益服务点）。");
+        assertThat(AssistantService.describeRequests(List.of(request))).contains("您最近的申请", "申请 #2").doesNotContain("#17");
         assertThat(AssistantService.describeRequests(List.of())).contains("还没有提交过申请");
     }
 
@@ -66,10 +66,10 @@ class AssistantFallbackResponseTest {
     void listsReservationsWithPickupCodeAndReservationNumber() {
         var reservation = new ReservationService.ReservationView(5, 17, "公益大米 5 千克", 1, "HELD",
             Instant.parse("2026-09-28T04:00:00Z"), Instant.EPOCH, "邻需通·夏阳公益服务点", "青松路", 0, 0,
-            null, null, "123456");
+            null, null, "123456", 3);
 
         assertThat(AssistantService.describeReservations(List.of(reservation)))
-            .contains("预约 #5", "领取码 123456", "9月28日 12:00", "邻需通·夏阳公益服务点");
+            .contains("申请 #3", "领取码 123456", "9月28日 12:00", "邻需通·夏阳公益服务点");
     }
 
     @Test

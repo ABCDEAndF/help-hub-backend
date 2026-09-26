@@ -67,16 +67,16 @@ public class AutoDecisionService {
 
         requestService.transition(requestId, actor,
             new RequestService.TransitionRequest(RequestStatus.APPROVED, null, null), true);
-        ReservationService.ReservationReceipt receipt = reservations.reserve(request.residentId(),
+        reservations.reserve(request.residentId(),
             new ReservationService.ReserveInput(requestId, chosen.itemId(), request.quantity()));
         if (request.fulfillmentMethod() == FulfillmentMethod.PICKUP) {
             requestService.transition(requestId, actor,
                 new RequestService.TransitionRequest(RequestStatus.SCHEDULED, chosen.servicePointId(), null), false);
             requests.recordDecision(requestId, "已自动批准：请在营业时间 " + chosen.hours() + " 到"
-                + chosen.servicePointName() + "，出示预约 #" + receipt.reservationId() + " 的领取码领取。");
+                + chosen.servicePointName() + "，出示领取码领取（领取码见“我的预约”，48 小时内有效）。");
         } else {
             requests.recordDecision(requestId, "已自动批准：物资已在" + chosen.servicePointName()
-                + "锁定（预约 #" + receipt.reservationId() + "），系统正在安排补给车取货配送，可在地图查看车辆位置。");
+                + "锁定，系统正在安排补给车取货配送，可在地图查看车辆位置。");
         }
         return requestService.get(requestId);
     }

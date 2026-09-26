@@ -82,6 +82,12 @@ public class InventoryController {
         return inventory.find(id).orElseThrow();
     }
 
+    /** Staff enter only the 6-digit code the resident shows; the reply says what to hand over. */
+    @PostMapping("/api/admin/reservations/collect-by-code")
+    ReservationService.Handover collectByCode(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody CollectInput input) {
+        return reservations.collectByCode(CurrentUser.id(jwt), input.pickupCode());
+    }
+
     @PostMapping("/api/admin/reservations/{id}/collect")
     void collect(@AuthenticationPrincipal Jwt jwt, @PathVariable long id, @Valid @RequestBody CollectInput input) {
         reservations.collect(CurrentUser.id(jwt), id, input.pickupCode());

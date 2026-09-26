@@ -14,7 +14,7 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class SupplyRequestRepository {
     private static final String SELECT = """
-        SELECT r.id, r.resident_id, u.display_name AS resident_name, r.category, r.inventory_item_id,
+        SELECT r.id, r.resident_id, r.resident_seq, u.display_name AS resident_name, r.category, r.inventory_item_id,
           r.item_description, r.quantity, r.urgency, r.fulfillment_method, r.status, r.latitude, r.longitude,
           r.approximate_address, r.accessibility_notes, r.decision_note, r.preferred_start, r.preferred_end,
           r.assigned_service_point_id, r.assigned_cart_id, sp.name AS assigned_service_point_name,
@@ -31,13 +31,18 @@ public class SupplyRequestRepository {
 
     public long insert(long residentId, CreateSupplyRequest input) {
         org.springframework.jdbc.support.GeneratedKeyHolder keys = new org.springframework.jdbc.support.GeneratedKeyHolder();
+        // Serialises a resident's own submissions so their request numbers never collide.
+        jdbc.sql("SELECT id FROM users WHERE id=:residentId FOR UPDATE").param("residentId", residentId)
+            .query(Long.class).optional();
         jdbc.sql("""
                 INSERT INTO supply_requests
-                  (resident_id, category, inventory_item_id, item_description, quantity, urgency, fulfillment_method,
-                   latitude, longitude, approximate_address, accessibility_notes, preferred_start, preferred_end)
-                VALUES
-                  (:residentId, :category, :inventoryItemId, :description, :quantity, :urgency, :fulfillmentMethod,
-                   :latitude, :longitude, :address, :notes, :preferredStart, :preferredEnd)
+                  (resident_id, resident_seq, category, inventory_item_id, item_description, quantity, urgency,
+                   fulfillment_method, latitude, longitude, approximate_address, accessibility_notes,
+                   preferred_start, preferred_end)
+                SELECT :residentId, COALESCE(MAX(resident_seq), 0) + 1, :category, :inventoryItemId, :description,
+                  :quantity, :urgency, :fulfillmentMethod, :latitude, :longitude, :address, :notes,
+                  :preferredStart, :preferredEnd
+                FROM supply_requests WHERE resident_id = :residentId
                 """)
             .param("residentId", residentId)
             .param("category", input.category())
@@ -61,6 +66,12 @@ public class SupplyRequestRepository {
     public Optional<SupplyRequestView> findById(long id) {
         return jdbc.sql(SELECT + " WHERE r.id=:id")
             .param("id", id).query(mapper()).optional();
+    }
+
+    /** A resident's request by the number they see (their own 1, 2, 3 ...). */
+    public Optional<SupplyRequestView> findOwnedByNumber(int number, long residentId) {
+        return jdbc.sql(SELECT + " WHERE r.resident_seq=:number AND r.resident_id=:residentId")
+            .param("number", number).param("residentId", residentId).query(mapper()).optional();
     }
 
     public Optional<SupplyRequestView> findOwned(long id, long residentId) {
@@ -116,7 +127,7 @@ public class SupplyRequestRepository {
 
     private RowMapper<SupplyRequestView> mapper() {
         return (rs, rowNum) -> new SupplyRequestView(
-            rs.getLong("id"), rs.getLong("resident_id"), rs.getString("resident_name"),
+            rs.getLong("id"), rs.getLong("resident_id"), rs.getInt("resident_seq"), rs.getString("resident_name"),
             rs.getString("category"), nullableLong(rs, "inventory_item_id"), rs.getString("item_description"),
             rs.getInt("quantity"),
             Urgency.valueOf(rs.getString("urgency")), FulfillmentMethod.valueOf(rs.getString("fulfillment_method")),

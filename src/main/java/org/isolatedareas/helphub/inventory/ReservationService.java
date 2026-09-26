@@ -103,7 +103,8 @@ public class ReservationService {
             Map.of("requestId", request.id(), "itemId", item.id(), "quantity", input.quantity(), "expiresAt", expiresAt));
         outbox.append("RESERVATION", reservationId, "ReservationHeld", "notification.send",
             Map.of("eventId", "reservation-held-" + reservationId, "recipientUserId", residentId,
-                "template", "RESERVATION_HELD", "reservationId", reservationId));
+                "template", "RESERVATION_HELD", "reservationId", reservationId,
+                "requestNumber", request.residentNumber(), "itemName", item.name()));
         int amountFen = Math.multiplyExact(item.unitPriceFen(), input.quantity());
         return new ReservationReceipt(reservationId, item.name(), input.quantity(), amountFen == 0 ? pickupCode : null, expiresAt,
             amountFen > 0, amountFen);
@@ -113,8 +114,10 @@ public class ReservationService {
         return jdbc.sql("""
                 SELECT r.id, r.request_id, r.quantity, r.status, r.expires_at, r.created_at,
                   i.name AS item_name, i.unit_price_fen, s.name AS service_point_name,
-                  s.address AS service_point_address, p.id AS payment_id, p.status AS payment_status
+                  s.address AS service_point_address, p.id AS payment_id, p.status AS payment_status,
+                  q.resident_seq
                 FROM reservations r
+                JOIN supply_requests q ON q.id=r.request_id
                 JOIN inventory_items i ON i.id=r.inventory_item_id
                 JOIN service_points s ON s.id=i.service_point_id
                 LEFT JOIN payment_orders p ON p.reservation_id=r.id
@@ -128,7 +131,7 @@ public class ReservationService {
                 rs.getInt("unit_price_fen"), rs.getInt("unit_price_fen") * rs.getInt("quantity"),
                 (Long) rs.getObject("payment_id"), rs.getString("payment_status"),
                 pickupCodeVisible(rs.getString("status"), rs.getInt("unit_price_fen"))
-                    ? pickupCode(rs.getLong("id"), residentId) : null)).list();
+                    ? pickupCode(rs.getLong("id"), residentId) : null, rs.getInt("resident_seq"))).list();
     }
 
     @Transactional
@@ -155,6 +158,38 @@ public class ReservationService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Invalid pickup code");
         }
         completeCollection(operatorId, row);
+    }
+
+    /**
+     * Collects the single active reservation whose pickup code matches. Codes are derived per
+     * reservation, so a collision between two active reservations is possible but rare; it is
+     * reported instead of guessing.
+     */
+    @Transactional
+    public Handover collectByCode(long operatorId, String pickupCode) {
+        List<Handover> matches = jdbc.sql("""
+                SELECT r.id, r.resident_id, r.quantity, i.name AS item_name, i.unit, s.name AS point_name,
+                  u.display_name, q.resident_seq
+                FROM reservations r
+                JOIN inventory_items i ON i.id = r.inventory_item_id
+                JOIN service_points s ON s.id = i.service_point_id
+                JOIN users u ON u.id = r.resident_id
+                JOIN supply_requests q ON q.id = r.request_id
+                WHERE r.status IN ('HELD','CONFIRMED')
+                """)
+            .query((rs, n) -> new Handover(rs.getLong("id"), rs.getLong("resident_id"), rs.getString("display_name"),
+                rs.getInt("resident_seq"), rs.getString("item_name"), rs.getInt("quantity"), rs.getString("unit"),
+                rs.getString("point_name")))
+            .list().stream()
+            .filter(candidate -> pickupCode(candidate.reservationId(), candidate.residentId()).equals(pickupCode))
+            .toList();
+        if (matches.isEmpty()) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Invalid pickup code");
+        if (matches.size() > 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Pickup code matches several reservations");
+        }
+        Handover match = matches.getFirst();
+        collect(operatorId, match.reservationId(), pickupCode);
+        return match;
     }
 
     /**
@@ -187,22 +222,27 @@ public class ReservationService {
         afterCommit(() -> redis.delete("reservation:" + reservationId));
         audit.record(operatorId, "RESERVATION_COLLECTED", "RESERVATION", reservationId, row,
             Map.of("status", "COLLECTED"));
+        long requestId = jdbc.sql("SELECT request_id FROM reservations WHERE id=:id").param("id", reservationId)
+            .query(Long.class).single();
+        events.publishEvent(new ReservationCollected(requestId, reservationId, operatorId));
     }
 
     @Scheduled(fixedDelay = 60_000)
     @Transactional
     public void expireHolds() {
         var expired = jdbc.sql("""
-                SELECT id, inventory_item_id, quantity FROM reservations
+                SELECT id, request_id, inventory_item_id, quantity FROM reservations
                 WHERE status='HELD' AND expires_at < CURRENT_TIMESTAMP(3) FOR UPDATE
                 """)
-            .query((rs, n) -> new ExpiredRow(rs.getLong("id"), rs.getLong("inventory_item_id"), rs.getInt("quantity")))
+            .query((rs, n) -> new ExpiredRow(rs.getLong("id"), rs.getLong("request_id"), rs.getLong("inventory_item_id"),
+                rs.getInt("quantity")))
             .list();
         for (ExpiredRow row : expired) {
             inventory.release(row.inventoryItemId(), row.quantity());
             jdbc.sql("UPDATE reservations SET status='EXPIRED' WHERE id=:id AND status='HELD'")
                 .param("id", row.id()).update();
             afterCommit(() -> redis.delete("reservation:" + row.id()));
+            events.publishEvent(new ReservationExpired(row.requestId(), row.id()));
         }
     }
 
@@ -241,6 +281,10 @@ public class ReservationService {
         }
     }
 
+    public record Handover(long reservationId, @com.fasterxml.jackson.annotation.JsonIgnore long residentId,
+                           String residentName, int requestNumber, String itemName, int quantity, String unit,
+                           String servicePointName) {
+    }
     public record ReserveInput(long requestId, long inventoryItemId,
                                @jakarta.validation.constraints.Min(1)
                                @jakarta.validation.constraints.Max(100) int quantity) {
@@ -251,11 +295,12 @@ public class ReservationService {
     public record ReservationView(long reservationId, long requestId, String itemName, int quantity,
                                   String status, Instant expiresAt, Instant createdAt,
                                   String servicePointName, String servicePointAddress, int unitPriceFen,
-                                  int amountFen, Long paymentId, String paymentStatus, String pickupCode) {
+                                  int amountFen, Long paymentId, String paymentStatus, String pickupCode,
+                                  int requestNumber) {
     }
     record ReservationRow(long id, long residentId, long inventoryItemId, int quantity, String codeHash,
                           String status, int unitPriceFen) {
     }
-    record ExpiredRow(long id, long inventoryItemId, int quantity) {
+    record ExpiredRow(long id, long requestId, long inventoryItemId, int quantity) {
     }
 }

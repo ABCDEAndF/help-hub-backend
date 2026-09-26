@@ -9,6 +9,7 @@ import org.isolatedareas.helphub.domain.Urgency;
 public record SupplyRequestView(
     long id,
     long residentId,
+    int residentNumber,
     String residentName,
     String category,
     Long inventoryItemId,

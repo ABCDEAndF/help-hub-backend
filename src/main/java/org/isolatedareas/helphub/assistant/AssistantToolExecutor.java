@@ -52,7 +52,8 @@ public class AssistantToolExecutor {
     public ToolResult execute(long userId, String tool, JsonNode args) {
         return switch (tool) {
             case "check_inventory" -> ToolResult.completed(byCategory(args.path("category").asText("")));
-            case "get_request_status" -> ToolResult.completed(requests.findOwned(requiredLong(args, "requestId"), userId)
+            // Residents speak of their own numbers (1, 2, 3 ...), never the internal id.
+            case "get_request_status" -> ToolResult.completed(requests.findOwnedByNumber((int) requiredLong(args, "requestId"), userId)
                 .orElseThrow(() -> new IllegalArgumentException("Request was not found")));
             case "find_nearby_service_points" -> ToolResult.completed(findNearby(args));
             case "list_service_points" -> ToolResult.completed(listServicePoints(args));
@@ -95,17 +96,20 @@ public class AssistantToolExecutor {
     private ToolResult prepareReservation(long userId, JsonNode args) {
         ReservationService.ReserveInput input = reservationInput(args);
         // Check ownership and state before a confirmation card is shown. Without this the
-        // resident is asked to approve a card built from an id the model invented, and only
+        // resident is asked to approve a card built from a number the model invented, and only
         // learns it was never theirs after pressing confirm.
-        var request = requests.findOwned(input.requestId(), userId).orElseThrow(
-            () -> new IllegalArgumentException("申请 #" + input.requestId()
-                + " 不存在或不属于当前用户，请向用户确认正确的申请编号"));
+        int number = (int) input.requestId();
+        var request = requests.findOwnedByNumber(number, userId).orElseThrow(
+            () -> new IllegalArgumentException("申请 #" + number + " 不存在，请向用户确认正确的申请编号"));
         if (request.status() != RequestStatus.APPROVED && request.status() != RequestStatus.SCHEDULED) {
-            throw new IllegalArgumentException("申请 #" + input.requestId() + " 尚未批准，暂时不能预约");
+            throw new IllegalArgumentException("申请 #" + number + " 尚未批准，暂时不能预约");
         }
-        String summary = "为申请 #" + input.requestId() + " 预约库存 #"
-            + input.inventoryItemId() + "，数量 " + input.quantity();
-        return ToolResult.confirmation(confirmations.create(userId, "reserve_pickup_slot", args, summary));
+        String itemName = inventory.find(input.inventoryItemId()).map(item -> item.name() + "（" + item.servicePointName() + "）")
+            .orElseThrow(() -> new IllegalArgumentException("库存编号 " + input.inventoryItemId() + " 不存在"));
+        // The confirmed action runs later from the stored arguments, so store the internal id.
+        var resolved = ((com.fasterxml.jackson.databind.node.ObjectNode) args.deepCopy()).put("requestId", request.id());
+        String summary = "为申请 #" + number + " 预约 " + itemName + "，数量 " + input.quantity();
+        return ToolResult.confirmation(confirmations.create(userId, "reserve_pickup_slot", resolved, summary));
     }
 
     private Object createRequest(long userId, JsonNode args) {

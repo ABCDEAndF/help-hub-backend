@@ -40,7 +40,7 @@ public class RequestService {
         audit.record(residentId, "REQUEST_CREATED", "SUPPLY_REQUEST", id, null, created);
         outbox.append("SUPPLY_REQUEST", id, "SupplyRequestCreated", "notification.send",
             Map.of("eventId", "request-created-" + id, "requestId", id, "recipientUserId", residentId,
-                "template", "REQUEST_RECEIVED"));
+                "template", "REQUEST_RECEIVED", "requestNumber", created.residentNumber()));
         return created;
     }
 
@@ -89,7 +89,8 @@ public class RequestService {
         if (notifyResident) {
             outbox.append("SUPPLY_REQUEST", id, "SupplyRequestStatusChanged", "notification.send",
                 Map.of("eventId", "request-status-" + id + "-" + input.status(), "requestId", id,
-                    "recipientUserId", before.residentId(), "template", "REQUEST_" + input.status()));
+                    "recipientUserId", before.residentId(), "template", "REQUEST_" + input.status(),
+                    "requestNumber", before.residentNumber()));
         }
         if (input.status() == RequestStatus.FULFILLED) {
             jdbc.sql("""
@@ -117,7 +118,8 @@ public class RequestService {
         return switch (from) {
             case SUBMITTED -> to == RequestStatus.UNDER_REVIEW || to == RequestStatus.CANCELLED;
             case UNDER_REVIEW -> to == RequestStatus.APPROVED || to == RequestStatus.REJECTED;
-            case APPROVED -> to == RequestStatus.SCHEDULED || to == RequestStatus.CANCELLED;
+            // FULFILLED straight from APPROVED: the supplies were already handed over against a pickup code.
+            case APPROVED -> to == RequestStatus.SCHEDULED || to == RequestStatus.FULFILLED || to == RequestStatus.CANCELLED;
             case SCHEDULED -> to == RequestStatus.FULFILLED || to == RequestStatus.CANCELLED;
             case FULFILLED, REJECTED, CANCELLED -> false;
         };
