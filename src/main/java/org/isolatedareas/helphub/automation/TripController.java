@@ -8,6 +8,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
@@ -26,6 +27,12 @@ public class TripController {
     CartTripService.Tracking tracking(@AuthenticationPrincipal Jwt jwt, @PathVariable long id) {
         return trips.tracking(id, CurrentUser.id(jwt), Instant.now())
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No delivery trip for this request"));
+    }
+
+    /** Courier closes a delivery without the resident's code; the resident may appeal by phone. */
+    @PostMapping("/admin/requests/{id}/mark-delivered")
+    void markDelivered(@AuthenticationPrincipal Jwt jwt, @PathVariable long id) {
+        trips.markDelivered(id, CurrentUser.id(jwt));
     }
 
     @GetMapping("/admin/trips")

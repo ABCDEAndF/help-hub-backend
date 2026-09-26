@@ -151,7 +151,9 @@ public class CartTripService {
     }
 
     private void deliver(long actor, DueStop stop) {
-        if (requestService.get(stop.requestId()).status() == RequestStatus.CANCELLED) return;
+        // Cancelled meanwhile, or a courier already verified the code / marked it delivered.
+        RequestStatus current = requestService.get(stop.requestId()).status();
+        if (current == RequestStatus.CANCELLED || current == RequestStatus.FULFILLED) return;
         boolean handedOver = stop.reservationId() != null && reservations.collectOnDelivery(actor, stop.reservationId());
         if (!handedOver) {
             log.warn("Delivery stop {} reached but reservation {} was no longer collectible", stop.id(), stop.reservationId());
@@ -164,6 +166,28 @@ public class CartTripService {
                 new RequestService.TransitionRequest(RequestStatus.FULFILLED, null, null), true);
         }
         requests.recordDecision(stop.requestId(), "补给车已于 " + CLOCK.format(Instant.now()) + " 送达，本次服务已完成。");
+    }
+
+    /**
+     * A courier marks a delivery as handed over without the resident's code. The request is
+     * closed unilaterally; residents who did not receive anything can appeal by phone.
+     */
+    @Transactional
+    public void markDelivered(long requestId, long actorId) {
+        var request = requestService.get(requestId);
+        if (request.status() != RequestStatus.APPROVED && request.status() != RequestStatus.SCHEDULED) {
+            throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT,
+                "Cannot transition from " + request.status() + " to FULFILLED");
+        }
+        List<Long> held = jdbc.sql("SELECT id FROM reservations WHERE request_id=:id AND status IN ('HELD','CONFIRMED')")
+            .param("id", requestId).query(Long.class).list();
+        held.forEach(reservationId -> reservations.collectOnDelivery(actorId, reservationId));
+        if (requestService.get(requestId).status() != RequestStatus.FULFILLED) {
+            requestService.transition(requestId, actorId,
+                new RequestService.TransitionRequest(RequestStatus.FULFILLED, null, null), true);
+        }
+        requests.recordDecision(requestId, "工作人员已于 " + CLOCK.format(Instant.now())
+            + " 标记送达，本次服务已完成。如未收到物资，请点“申诉”联系我们。");
     }
 
     /** Current position of every cart that is on a trip, keyed by cart id. */
@@ -187,8 +211,10 @@ public class CartTripService {
         CartMotion motion = motion(trip, now, requestId);
         TripStopRow own = trip.stops().stream().filter(stop -> Long.valueOf(requestId).equals(stop.requestId()))
             .findFirst().orElseThrow();
+        boolean delivered = "DONE".equals(own.status())
+            || requestService.get(requestId).status() == RequestStatus.FULFILLED;
         return Optional.of(new Tracking(trip.cartId(), trip.cartName(), motion.latitude(), motion.longitude(),
-            motion.statusText(), own.arriveAt(), "DONE".equals(own.status()), own.latitude(), own.longitude(),
+            motion.statusText(), own.arriveAt(), delivered, own.latitude(), own.longitude(),
             motion.path()));
     }
 

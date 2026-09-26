@@ -184,6 +184,19 @@ class AutomationMysqlIntegrationTest {
         assertThat(lapsed.decisionNote()).contains("48 小时");
         assertThat(industrialRiceReserved.get()).isZero();
 
+        // A courier may close a delivery before the cart's simulated arrival; the cart then skips the stop.
+        SupplyRequestView courier = tx.execute(s -> decisions.decide(requestService.create(resident,
+            request(industrialRice, 1, FulfillmentMethod.DELIVERY)).id()));
+        tx.execute(s -> trips.planTrips(null));
+        assertThat(requestService.get(courier.id()).status()).isEqualTo(RequestStatus.SCHEDULED);
+        tx.executeWithoutResult(s -> trips.markDelivered(courier.id(), system.id()));
+        assertThat(requestService.get(courier.id()).status()).isEqualTo(RequestStatus.FULFILLED);
+        assertThat(trips.tracking(courier.id(), resident, Instant.now()).orElseThrow().delivered()).isTrue();
+        long courierTrip = jdbc.sql("SELECT id FROM cart_trips WHERE status='ACTIVE'").query(Long.class).single();
+        tx.executeWithoutResult(s -> trips.advanceTrip(courierTrip, Instant.now().plusSeconds(3 * 3600)));
+        assertThat(requestService.get(courier.id()).decisionNote()).contains("工作人员", "标记送达");
+        assertThat(industrialRiceReserved.get()).isZero();
+
         // Every resident's own numbering starts at 1.
         jdbc.sql("INSERT INTO users (wechat_open_id, display_name) VALUES ('it-neighbour', '邻居')").update();
         long neighbour = jdbc.sql("SELECT id FROM users WHERE wechat_open_id='it-neighbour'").query(Long.class).single();
