@@ -27,7 +27,7 @@ public class NotificationController {
     List<NotificationView> list(@AuthenticationPrincipal Jwt jwt) {
         return jdbc.sql("""
                 SELECT id, template_code, payload, created_at FROM notification_deliveries
-                WHERE recipient_user_id=:userId ORDER BY created_at DESC LIMIT 100
+                WHERE recipient_user_id=:userId AND channel='IN_APP' ORDER BY created_at DESC LIMIT 100
                 """).param("userId", CurrentUser.id(jwt))
             .query((rs, n) -> new NotificationView(rs.getLong("id"), rs.getString("template_code"),
                 parse(rs.getString("payload")), rs.getTimestamp("created_at").toInstant())).list();
