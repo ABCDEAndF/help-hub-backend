@@ -13,4 +13,9 @@ class IdempotencyKeysTest {
     void fallsBackToCloudRunSafeHeader() {
         assertThat(IdempotencyKeys.resolve(" ", "cloudrun")).isEqualTo("cloudrun");
     }
+
+    @Test
+    void fallsBackToGatewaySafeQueryParameter() {
+        assertThat(IdempotencyKeys.resolve(null, " ", "query")).isEqualTo("query");
+    }
 }

@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -43,10 +44,12 @@ public class InventoryController {
         @AuthenticationPrincipal Jwt jwt,
         @RequestHeader(value = "Idempotency-Key", required = false) String key,
         @RequestHeader(value = "X-Idempotency-Key", required = false) String cloudRunKey,
+        @RequestParam(value = "idempotencyKey", required = false) String queryKey,
         @Valid @RequestBody ReservationService.ReserveInput input
     ) {
         long userId = CurrentUser.id(jwt);
-        return idempotency.execute(IdempotencyKeys.resolve(key, cloudRunKey), userId, "CREATE_RESERVATION", input,
+        return idempotency.execute(IdempotencyKeys.resolve(key, cloudRunKey, queryKey), userId,
+            "CREATE_RESERVATION", input,
             ReservationService.ReservationReceipt.class, () -> reservations.reserve(userId, input));
     }
 

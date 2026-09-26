@@ -4,10 +4,12 @@ public final class IdempotencyKeys {
     private IdempotencyKeys() {
     }
 
-    public static String resolve(String standardKey, String cloudRunKey) {
-        if (standardKey != null && !standardKey.isBlank()) {
-            return standardKey;
+    public static String resolve(String... candidates) {
+        for (String candidate : candidates) {
+            if (candidate != null && !candidate.isBlank()) {
+                return candidate;
+            }
         }
-        return cloudRunKey;
+        return null;
     }
 }

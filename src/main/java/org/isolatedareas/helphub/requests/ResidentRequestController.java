@@ -34,9 +34,10 @@ public class ResidentRequestController {
     SupplyRequestView create(@AuthenticationPrincipal Jwt jwt,
                              @RequestHeader(value = "Idempotency-Key", required = false) String key,
                              @RequestHeader(value = "X-Idempotency-Key", required = false) String cloudRunKey,
+                             @RequestParam(value = "idempotencyKey", required = false) String queryKey,
                              @Valid @RequestBody CreateSupplyRequest input) {
         long userId = CurrentUser.id(jwt);
-        return idempotency.execute(IdempotencyKeys.resolve(key, cloudRunKey), userId,
+        return idempotency.execute(IdempotencyKeys.resolve(key, cloudRunKey, queryKey), userId,
             "CREATE_SUPPLY_REQUEST", input, SupplyRequestView.class,
             () -> service.create(userId, input));
     }
