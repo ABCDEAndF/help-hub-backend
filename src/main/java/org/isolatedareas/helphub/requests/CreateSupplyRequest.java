@@ -9,6 +9,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.Instant;
+import org.isolatedareas.helphub.domain.FulfillmentMethod;
 import org.isolatedareas.helphub.domain.Urgency;
 
 public record CreateSupplyRequest(
@@ -21,12 +22,15 @@ public record CreateSupplyRequest(
     @Size(max = 255) String approximateAddress,
     @Size(max = 500) String accessibilityNotes,
     Instant preferredStart,
-    Instant preferredEnd
+    Instant preferredEnd,
+    FulfillmentMethod fulfillmentMethod
 ) {
     public CreateSupplyRequest {
         if (preferredStart != null && preferredEnd != null && !preferredEnd.isAfter(preferredStart)) {
             throw new IllegalArgumentException("preferredEnd must be after preferredStart");
         }
+        // Mini program 1.0.0 predates the choice and every request it sent was routed to a cart.
+        if (fulfillmentMethod == null) fulfillmentMethod = FulfillmentMethod.DELIVERY;
     }
 }
 

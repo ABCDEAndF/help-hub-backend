@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.Date;
 import java.time.LocalDate;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.isolatedareas.helphub.audit.AuditService;
@@ -57,13 +58,18 @@ public class RoutePlanningService {
                     """)
                 .query((rs, n) -> new RoutePlanningAlgorithm.CartInput(rs.getLong("id"),
                     rs.getInt("capacity_units"), rs.getDouble("latitude"), rs.getDouble("longitude"))).list();
+            // Pickup requests are collected at a service point and never join a cart route.
+            Map<Long, Long> residents = new HashMap<>();
             List<RoutePlanningAlgorithm.StopInput> requests = jdbc.sql("""
-                    SELECT id, quantity, urgency, latitude, longitude FROM supply_requests
-                    WHERE status='APPROVED' ORDER BY created_at
+                    SELECT id, resident_id, quantity, urgency, latitude, longitude FROM supply_requests
+                    WHERE status='APPROVED' AND fulfillment_method='DELIVERY' ORDER BY created_at
                     """)
-                .query((rs, n) -> new RoutePlanningAlgorithm.StopInput(rs.getLong("id"),
-                    rs.getInt("quantity"), rs.getString("urgency"), rs.getDouble("latitude"),
-                    rs.getDouble("longitude"))).list();
+                .query((rs, n) -> {
+                    residents.put(rs.getLong("id"), rs.getLong("resident_id"));
+                    return new RoutePlanningAlgorithm.StopInput(rs.getLong("id"),
+                        rs.getInt("quantity"), rs.getString("urgency"), rs.getDouble("latitude"),
+                        rs.getDouble("longitude"));
+                }).list();
             RoutePlanningAlgorithm.PlanningResult result = algorithm.plan(carts, requests);
             for (RoutePlanningAlgorithm.CartRoute route : result.routes()) {
                 for (RoutePlanningAlgorithm.PlannedStop stop : route.stops()) {
@@ -76,10 +82,15 @@ public class RoutePlanningService {
                         .param("requestId", stop.requestId()).param("stopOrder", stop.sequence())
                         .param("latitude", stop.latitude()).param("longitude", stop.longitude())
                         .param("demand", stop.demandUnits()).update();
-                    jdbc.sql("""
+                    int scheduled = jdbc.sql("""
                             UPDATE supply_requests SET status='SCHEDULED', assigned_cart_id=:cartId, version=version+1
                             WHERE id=:requestId AND status='APPROVED'
                             """).param("cartId", route.cartId()).param("requestId", stop.requestId()).update();
+                    if (scheduled == 1) {
+                        outbox.append("SUPPLY_REQUEST", stop.requestId(), "SupplyRequestStatusChanged", "notification.send",
+                            Map.of("eventId", "request-status-" + stop.requestId() + "-SCHEDULED", "requestId", stop.requestId(),
+                                "recipientUserId", residents.get(stop.requestId()), "template", "REQUEST_SCHEDULED"));
+                    }
                 }
             }
             jdbc.sql("""

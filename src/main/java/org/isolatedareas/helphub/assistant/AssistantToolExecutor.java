@@ -5,9 +5,11 @@ import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Validator;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.isolatedareas.helphub.domain.FulfillmentMethod;
 import org.isolatedareas.helphub.domain.RequestStatus;
 import org.isolatedareas.helphub.domain.Urgency;
 import org.isolatedareas.helphub.inventory.InventoryItemView;
@@ -21,7 +23,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class AssistantToolExecutor {
-    static final List<String> INVENTORY_CATEGORIES = List.of("FOOD", "WATER", "HYGIENE", "MEDICAL", "OTHER");
+    static final List<String> INVENTORY_CATEGORIES = List.of("FOOD", "WATER", "HYGIENE", "MEDICAL", "EMERGENCY", "OTHER");
 
     private final InventoryRepository inventory;
     private final SupplyRequestRepository requests;
@@ -51,6 +53,8 @@ public class AssistantToolExecutor {
                 .orElseThrow(() -> new IllegalArgumentException("Request was not found")));
             case "find_nearby_service_points" -> ToolResult.completed(findNearby(args));
             case "list_service_points" -> ToolResult.completed(listServicePoints(args));
+            case "list_my_requests" -> ToolResult.completed(requests.findByResident(userId, 5, 0));
+            case "list_my_reservations" -> ToolResult.completed(reservations.list(userId).stream().limit(5).toList());
             case "prepare_supply_request" -> prepareRequest(userId, args);
             case "reserve_pickup_slot" -> prepareReservation(userId, args);
             default -> throw new IllegalArgumentException("Tool is not allowed: " + tool);
@@ -109,7 +113,9 @@ public class AssistantToolExecutor {
             Urgency.valueOf(args.path("urgency").asText("NORMAL").toUpperCase()),
             requiredDecimal(args, "latitude"), requiredDecimal(args, "longitude"),
             nullableText(args, "approximateAddress"), nullableText(args, "accessibilityNotes"),
-            nullableInstant(args, "preferredStart"), nullableInstant(args, "preferredEnd")));
+            nullableInstant(args, "preferredStart"), nullableInstant(args, "preferredEnd"),
+            args.hasNonNull("fulfillmentMethod")
+                ? FulfillmentMethod.valueOf(args.path("fulfillmentMethod").asText().toUpperCase()) : null));
     }
 
     private ReservationService.ReserveInput reservationInput(JsonNode args) {
@@ -150,7 +156,7 @@ public class AssistantToolExecutor {
     private Object listServicePoints(JsonNode args) {
         String keyword = args.path("keyword").asText("").trim();
         return jdbc.sql("""
-                SELECT id, name, address, status FROM service_points
+                SELECT id, name, address, status, opens_at, closes_at FROM service_points
                 WHERE status='ACTIVE' AND (:keyword='' OR name LIKE :like OR address LIKE :like)
                 ORDER BY name LIMIT 50
                 """).param("keyword", keyword).param("like", "%" + keyword + "%")
@@ -160,6 +166,8 @@ public class AssistantToolExecutor {
                 point.put("name", rs.getString("name"));
                 point.put("address", rs.getString("address"));
                 point.put("status", rs.getString("status"));
+                point.put("opensAt", rs.getObject("opens_at", LocalTime.class));
+                point.put("closesAt", rs.getObject("closes_at", LocalTime.class));
                 return point;
             }).list();
     }

@@ -2,6 +2,7 @@ package org.isolatedareas.helphub.requests;
 
 import java.util.Map;
 import org.isolatedareas.helphub.audit.AuditService;
+import org.isolatedareas.helphub.domain.FulfillmentMethod;
 import org.isolatedareas.helphub.domain.RequestStatus;
 import org.isolatedareas.helphub.events.OutboxService;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -52,6 +53,17 @@ public class RequestService {
             ((input.servicePointId() == null) == (input.cartId() == null))) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "Scheduling requires exactly one service point or mobile cart");
+        }
+        if (input.status() == RequestStatus.SCHEDULED) {
+            boolean pickup = before.fulfillmentMethod() == FulfillmentMethod.PICKUP;
+            if (pickup && input.servicePointId() == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Pickup requests must be scheduled at a service point");
+            }
+            if (!pickup && input.cartId() == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Delivery requests must be scheduled on a mobile cart");
+            }
         }
         long version = requests.version(id);
         if (requests.transition(id, version, before.status(), input.status(), actorId,

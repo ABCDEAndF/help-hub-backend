@@ -12,6 +12,7 @@ import java.util.List;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.isolatedareas.helphub.audit.AuditService;
+import org.isolatedareas.helphub.domain.FulfillmentMethod;
 import org.isolatedareas.helphub.events.OutboxService;
 import org.isolatedareas.helphub.impact.StockoutAttempt;
 import org.isolatedareas.helphub.requests.SupplyRequestRepository;
@@ -31,7 +32,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class ReservationService {
-    private static final Duration HOLD_DURATION = Duration.ofMinutes(30);
+    private static final Duration HOLD_DURATION = Duration.ofHours(48);
     private final JdbcClient jdbc;
     private final InventoryRepository inventory;
     private final SupplyRequestRepository requests;
@@ -71,6 +72,11 @@ public class ReservationService {
         if (!item.category().equalsIgnoreCase(request.category())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Reserved inventory category must match the approved request");
+        }
+        if (request.fulfillmentMethod() == FulfillmentMethod.PICKUP && request.assignedServicePointId() != null
+            && request.assignedServicePointId() != item.servicePointId()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Pickup inventory must come from the assigned service point");
         }
         if (item.freeQuantity() < input.quantity()) {
             events.publishEvent(new StockoutAttempt(residentId, request.id(), item.id(),

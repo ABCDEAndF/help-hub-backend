@@ -3,9 +3,15 @@ package org.isolatedareas.helphub.api;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.math.BigDecimal;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.flywaydb.core.Flyway;
+import org.isolatedareas.helphub.domain.FulfillmentMethod;
+import org.isolatedareas.helphub.domain.Urgency;
+import org.isolatedareas.helphub.requests.CreateSupplyRequest;
+import org.isolatedareas.helphub.requests.SupplyRequestRepository;
+import org.isolatedareas.helphub.requests.SupplyRequestView;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -55,5 +61,17 @@ class IdempotencyMysqlIntegrationTest {
                 SELECT expires_at > CURRENT_TIMESTAMP(3) + INTERVAL 23 HOUR
                 FROM idempotency_records WHERE idempotency_key = :key
                 """).param("key", key).query(Boolean.class).single()).isTrue();
+
+        var requests = new SupplyRequestRepository(jdbc);
+        long pickupId = requests.insert(userId, new CreateSupplyRequest("FOOD", "大米", 1, Urgency.NORMAL,
+            new BigDecimal("31.15"), new BigDecimal("121.12"), null, null, null, null, FulfillmentMethod.PICKUP));
+        long pointId = jdbc.sql("SELECT MIN(id) FROM service_points").query(Long.class).single();
+        jdbc.sql("UPDATE supply_requests SET assigned_service_point_id=:point WHERE id=:id")
+            .param("point", pointId).param("id", pickupId).update();
+        var stored = requests.findOwned(pickupId, userId).orElseThrow();
+        assertThat(stored.fulfillmentMethod()).isEqualTo(FulfillmentMethod.PICKUP);
+        assertThat(stored.assignedServicePointName()).startsWith("邻需通·");
+        assertThat(stored.assignedCartName()).isNull();
+        assertThat(requests.findByResident(userId, 5, 0)).extracting(SupplyRequestView::id).contains(pickupId);
     }
 }

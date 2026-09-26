@@ -2,6 +2,7 @@ package org.isolatedareas.helphub.requests;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import org.isolatedareas.helphub.domain.FulfillmentMethod;
 import org.isolatedareas.helphub.domain.RequestStatus;
 import org.isolatedareas.helphub.domain.Urgency;
 
@@ -13,6 +14,7 @@ public record SupplyRequestView(
     String itemDescription,
     int quantity,
     Urgency urgency,
+    FulfillmentMethod fulfillmentMethod,
     RequestStatus status,
     BigDecimal latitude,
     BigDecimal longitude,
@@ -22,6 +24,8 @@ public record SupplyRequestView(
     Instant preferredEnd,
     Long assignedServicePointId,
     Long assignedCartId,
+    String assignedServicePointName,
+    String assignedCartName,
     Instant createdAt,
     Instant updatedAt
 ) {

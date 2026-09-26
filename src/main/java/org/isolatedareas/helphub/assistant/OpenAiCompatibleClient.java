@@ -72,6 +72,10 @@ public class OpenAiCompatibleClient {
         tools.add(tool("get_request_status",
             "查询当前登录居民本人的申请状态。后端已完成归属校验，你有权直接调用，无需额外授权。",
             schema(json.createObjectNode().set("requestId", integerProperty("申请编号")), "requestId")));
+        tools.add(tool("list_my_requests", "列出当前登录居民本人最近的申请及其状态。用户问“我的申请/进度”但没给编号时使用。",
+            objectSchema().set("properties", json.createObjectNode())));
+        tools.add(tool("list_my_reservations", "列出当前登录居民本人最近的物资预约、领取码和领取地点。",
+            objectSchema().set("properties", json.createObjectNode())));
         ObjectNode geoProperties = json.createObjectNode();
         geoProperties.set("latitude", numberProperty("纬度"));
         geoProperties.set("longitude", numberProperty("经度"));
@@ -94,6 +98,8 @@ public class OpenAiCompatibleClient {
         requestProperties.set("longitude", numberProperty("经度"));
         requestProperties.set("approximateAddress", stringProperty("大致地址"));
         requestProperties.set("accessibilityNotes", stringProperty("行动不便等说明"));
+        requestProperties.set("fulfillmentMethod", enumProperty("领取方式：PICKUP 到服务点自取，DELIVERY 补给车配送",
+            java.util.List.of("PICKUP", "DELIVERY")));
         tools.add(tool("prepare_supply_request",
             "提交物资需求。调用本工具只会生成一张确认卡片交给用户，不会立即写入数据；"
                 + "参数齐全时请直接调用，不要先用文字向用户征求同意。",

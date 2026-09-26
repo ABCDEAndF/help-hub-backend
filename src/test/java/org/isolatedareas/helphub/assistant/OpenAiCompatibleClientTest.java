@@ -29,6 +29,8 @@ class OpenAiCompatibleClientTest {
                 {"model":"test-model","tool_choice":"auto","tools":[
                   {"type":"function","function":{"name":"check_inventory"}},
                   {"type":"function","function":{"name":"get_request_status"}},
+                  {"type":"function","function":{"name":"list_my_requests"}},
+                  {"type":"function","function":{"name":"list_my_reservations"}},
                   {"type":"function","function":{"name":"list_service_points"}},
                   {"type":"function","function":{"name":"find_nearby_service_points"}},
                   {"type":"function","function":{"name":"prepare_supply_request"}},

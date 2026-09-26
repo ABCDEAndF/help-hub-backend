@@ -91,8 +91,9 @@ public class WechatNotificationClient {
     private ObjectNode value(String value) { return json.createObjectNode().put("value", value); }
     private String title(String code) {
         return switch (code) {
-            case "REQUEST_CREATED" -> "物资需求已收到";
-            case "REQUEST_STATUS_CHANGED" -> "物资需求进度更新";
+            case "REQUEST_RECEIVED", "REQUEST_CREATED" -> "物资需求已收到";
+            case "REQUEST_UNDER_REVIEW", "REQUEST_APPROVED", "REQUEST_SCHEDULED", "REQUEST_FULFILLED",
+                 "REQUEST_REJECTED", "REQUEST_CANCELLED", "REQUEST_STATUS_CHANGED" -> "物资需求进度更新";
             case "RESERVATION_HELD" -> "物资预约已创建";
             case "PAYMENT_SUCCEEDED" -> "微信支付已完成";
             case "PAYMENT_REFUNDED" -> "退款已完成";
@@ -102,7 +103,13 @@ public class WechatNotificationClient {
     }
     private String status(String code) {
         return switch (code) {
-            case "REQUEST_CREATED" -> "已提交";
+            case "REQUEST_RECEIVED", "REQUEST_CREATED" -> "已提交";
+            case "REQUEST_UNDER_REVIEW" -> "审核中";
+            case "REQUEST_APPROVED" -> "已批准";
+            case "REQUEST_SCHEDULED" -> "已安排";
+            case "REQUEST_FULFILLED" -> "已完成";
+            case "REQUEST_REJECTED" -> "未通过";
+            case "REQUEST_CANCELLED" -> "已取消";
             case "REQUEST_STATUS_CHANGED" -> "已更新";
             case "RESERVATION_HELD" -> "待领取";
             case "PAYMENT_SUCCEEDED" -> "已支付";
