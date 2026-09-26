@@ -140,6 +140,13 @@ class AutomationMysqlIntegrationTest {
             .query(Integer.class).single()).isEqualTo(99);
         assertThat(industrialRiceReserved.get()).isEqualTo(2);
         assertThat(trips.tracking(delivery.id(), resident, Instant.now()).orElseThrow().delivered()).isTrue();
+
+        // Cancelling the scheduled pickup releases the two bags it was holding.
+        tx.execute(s -> requestService.transition(pickup.id(), system.id(),
+            new RequestService.TransitionRequest(RequestStatus.CANCELLED, null, null)));
+        assertThat(industrialRiceReserved.get()).isZero();
+        assertThat(jdbc.sql("SELECT status FROM reservations WHERE request_id=:id").param("id", pickup.id())
+            .query(String.class).single()).isEqualTo("CANCELLED");
     }
 
     private static long itemId(JdbcClient jdbc, String sku) {

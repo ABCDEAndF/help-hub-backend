@@ -83,6 +83,7 @@ public class RequestService {
             input.servicePointId(), input.cartId()) != 1) {
             throw new OptimisticLockingFailureException("Supply request changed concurrently");
         }
+        if (input.status() == RequestStatus.CANCELLED) releaseHeldStock(id);
         SupplyRequestView after = get(id);
         audit.record(actorId, "REQUEST_STATUS_CHANGED", "SUPPLY_REQUEST", id, before, after);
         if (notifyResident) {
@@ -99,6 +100,17 @@ public class RequestService {
                 .param("category", before.category()).param("quantity", before.quantity()).update();
         }
         return after;
+    }
+
+    /** A cancelled request must not keep stock locked until its reservation expires. */
+    private void releaseHeldStock(long requestId) {
+        jdbc.sql("""
+                UPDATE inventory_items i JOIN reservations r ON r.inventory_item_id = i.id
+                SET i.reserved_quantity = i.reserved_quantity - r.quantity, i.version = i.version + 1
+                WHERE r.request_id = :id AND r.status = 'HELD'
+                """).param("id", requestId).update();
+        jdbc.sql("UPDATE reservations SET status='CANCELLED' WHERE request_id=:id AND status='HELD'")
+            .param("id", requestId).update();
     }
 
     private boolean isAllowed(RequestStatus from, RequestStatus to) {

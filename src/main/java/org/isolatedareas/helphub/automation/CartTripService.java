@@ -151,6 +151,7 @@ public class CartTripService {
     }
 
     private void deliver(long actor, DueStop stop) {
+        if (requestService.get(stop.requestId()).status() == RequestStatus.CANCELLED) return;
         boolean handedOver = stop.reservationId() != null && reservations.collectOnDelivery(actor, stop.reservationId());
         if (!handedOver) {
             log.warn("Delivery stop {} reached but reservation {} was no longer collectible", stop.id(), stop.reservationId());

@@ -85,6 +85,15 @@ public class AssistantService {
 
         ArrayNode messages = conversationMessages(conversationId);
         appendRequestIdHint(messages, input.message());
+        if (input.latitude() != null && input.longitude() != null) {
+            messages.add(json.createObjectNode().put("role", "system").put("content",
+                "居民在小程序中保存的位置：纬度 " + input.latitude() + "，经度 " + input.longitude()
+                    + (input.placeLabel() == null || input.placeLabel().isBlank() ? "" : "（" + input.placeLabel() + "）")
+                    + "。提交需求或查找附近服务点时可直接使用此位置，并在回复中说明使用了该位置。"));
+        } else {
+            messages.add(json.createObjectNode().put("role", "system").put("content",
+                "居民尚未在小程序中设置位置。需要位置时，请提示居民先在首页或地图页点“设置我的位置”，不要索要经纬度数字。"));
+        }
         List<AssistantModels.ToolExecution> executions = new ArrayList<>();
         for (int round = 0; round < maxToolRounds; round++) {
             OpenAiCompatibleClient.ModelMessage response = model.complete(messages);
