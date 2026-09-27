@@ -3,6 +3,7 @@ package org.isolatedareas.helphub.geo;
 import java.security.SecureRandom;
 import java.util.List;
 import java.util.random.RandomGenerator;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 
@@ -21,6 +22,7 @@ public class ServiceArea {
     private final JdbcClient jdbc;
     private final RandomGenerator random;
 
+    @Autowired
     public ServiceArea(JdbcClient jdbc) {
         this(jdbc, new SecureRandom());
     }
