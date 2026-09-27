@@ -3,7 +3,10 @@ package org.isolatedareas.helphub.automation;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import org.isolatedareas.helphub.domain.FulfillmentMethod;
 import org.isolatedareas.helphub.domain.RequestStatus;
 import org.isolatedareas.helphub.geo.GeoMath;
@@ -99,23 +102,48 @@ public class AutoDecisionService {
         return requestService.get(requestId);
     }
 
-    /** Same free item (name, unit, category) at every active service point, locked for this decision. */
+    /**
+     * Locks the stock rows a submission for this item may reserve, before the request row is
+     * written. Inserting the request takes a shared foreign-key lock on the item's row; taking the
+     * exclusive lock only afterwards lets two residents ordering the same item deadlock.
+     */
+    public void lockStock(long itemId) {
+        candidatesFor(itemId);
+    }
+
+    /**
+     * Same free item (name, unit, category) at every active service point, its stock rows locked
+     * for this decision. Only inventory rows are locked, always in id order, so decisions on
+     * different items never wait on each other and decisions on the same item simply queue.
+     */
     private List<Candidate> candidatesFor(long itemId) {
-        return jdbc.sql("""
-                SELECT i.id, i.name, i.unit, i.available_quantity - i.reserved_quantity AS free_quantity,
-                  s.id AS point_id, s.name AS point_name, s.latitude, s.longitude, s.opens_at, s.closes_at
-                FROM inventory_items i
-                JOIN inventory_items ref ON ref.id = :itemId
-                JOIN service_points s ON s.id = i.service_point_id
-                WHERE i.name = ref.name AND i.unit = ref.unit AND i.category = ref.category
-                  AND i.unit_price_fen = 0 AND s.status = 'ACTIVE'
-                ORDER BY i.id FOR UPDATE
-                """).param("itemId", itemId)
-            .query((rs, n) -> new Candidate(rs.getLong("id"), rs.getString("name"), rs.getString("unit"),
-                rs.getInt("free_quantity"), rs.getLong("point_id"), rs.getString("point_name"),
-                rs.getDouble("latitude"), rs.getDouble("longitude"),
-                clock(rs.getString("opens_at")) + "–" + clock(rs.getString("closes_at")),
-                rs.getObject("opens_at", LocalTime.class), rs.getObject("closes_at", LocalTime.class))).list();
+        Optional<ItemKey> key = jdbc.sql("SELECT name, unit, category FROM inventory_items WHERE id=:itemId")
+            .param("itemId", itemId)
+            .query((rs, n) -> new ItemKey(rs.getString("name"), rs.getString("unit"), rs.getString("category")))
+            .optional();
+        if (key.isEmpty()) return List.of();
+        // A locking read returns the latest committed quantities, never this transaction's snapshot.
+        List<LockedStock> stock = jdbc.sql("""
+                SELECT id, service_point_id, available_quantity - reserved_quantity AS free_quantity
+                FROM inventory_items
+                WHERE name = :name AND unit = :unit AND category = :category AND unit_price_fen = 0
+                ORDER BY id FOR UPDATE
+                """).param("name", key.get().name()).param("unit", key.get().unit())
+            .param("category", key.get().category())
+            .query((rs, n) -> new LockedStock(rs.getLong("id"), rs.getLong("service_point_id"), rs.getInt("free_quantity")))
+            .list();
+        Map<Long, PointRow> points = new HashMap<>();
+        jdbc.sql("SELECT id, name, latitude, longitude, opens_at, closes_at FROM service_points WHERE status = 'ACTIVE'")
+            .query((rs, n) -> new PointRow(rs.getLong("id"), rs.getString("name"), rs.getDouble("latitude"),
+                rs.getDouble("longitude"), rs.getString("opens_at"), rs.getString("closes_at"),
+                rs.getObject("opens_at", LocalTime.class), rs.getObject("closes_at", LocalTime.class)))
+            .list().forEach(point -> points.put(point.id(), point));
+        return stock.stream().filter(row -> points.containsKey(row.servicePointId())).map(row -> {
+            PointRow point = points.get(row.servicePointId());
+            return new Candidate(row.itemId(), key.get().name(), key.get().unit(), row.freeQuantity(), point.id(),
+                point.name(), point.latitude(), point.longitude(), clock(point.opens()) + "–" + clock(point.closes()),
+                point.opensAt(), point.closesAt());
+        }).toList();
     }
 
     /** Nearest point with enough stock; with a window, only points open during part of it. */
@@ -136,6 +164,13 @@ public class AutoDecisionService {
         return time == null ? "" : time.substring(0, Math.min(5, time.length()));
     }
 
+    record ItemKey(String name, String unit, String category) {
+    }
+    record LockedStock(long itemId, long servicePointId, int freeQuantity) {
+    }
+    record PointRow(long id, String name, double latitude, double longitude, String opens, String closes,
+                    LocalTime opensAt, LocalTime closesAt) {
+    }
     record Candidate(long itemId, String name, String unit, int freeQuantity, long servicePointId,
                      String servicePointName, double latitude, double longitude, String hours,
                      LocalTime opensAt, LocalTime closesAt) {

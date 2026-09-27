@@ -35,14 +35,15 @@ public class IdempotencyService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid Idempotency-Key");
         }
         String requestHash = hash(operation + "\n" + serialize(request));
-        jdbc.sql("DELETE FROM idempotency_records WHERE idempotency_key=:key AND expires_at<CURRENT_TIMESTAMP(3)")
-            .param("key", key).update();
-        int inserted = jdbc.sql("""
-                INSERT IGNORE INTO idempotency_records
-                  (idempotency_key, user_id, request_hash, expires_at)
-                VALUES (:key, :userId, :requestHash, :expiresAt)
-                """).param("key", key).param("userId", userId).param("requestHash", requestHash)
-            .param("expiresAt", Timestamp.from(Instant.now().plus(24, ChronoUnit.HOURS))).update();
+        int inserted = claim(key, userId, requestHash);
+        if (inserted == 0) {
+            // An expired record is deleted by its primary key, so only that row is locked. Deleting
+            // "where key = ? and expired" up front would gap-lock the index for keys that do not exist
+            // yet, and concurrent first submissions then deadlock on their inserts.
+            int expired = jdbc.sql("DELETE FROM idempotency_records WHERE idempotency_key=:key AND expires_at<CURRENT_TIMESTAMP(3)")
+                .param("key", key).update();
+            if (expired > 0) inserted = claim(key, userId, requestHash);
+        }
         if (inserted == 0) {
             StoredResponse stored = jdbc.sql("""
                     SELECT user_id, request_hash, response_status, response_body
@@ -66,6 +67,15 @@ public class IdempotencyService {
                 WHERE idempotency_key=:key
                 """).param("body", serialize(response)).param("key", key).update();
         return response;
+    }
+
+    private int claim(String key, long userId, String requestHash) {
+        return jdbc.sql("""
+                INSERT IGNORE INTO idempotency_records
+                  (idempotency_key, user_id, request_hash, expires_at)
+                VALUES (:key, :userId, :requestHash, :expiresAt)
+                """).param("key", key).param("userId", userId).param("requestHash", requestHash)
+            .param("expiresAt", Timestamp.from(Instant.now().plus(24, ChronoUnit.HOURS))).update();
     }
 
     private String serialize(Object value) {

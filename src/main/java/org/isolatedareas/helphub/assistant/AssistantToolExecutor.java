@@ -9,7 +9,6 @@ import java.time.LocalTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.isolatedareas.helphub.automation.AutoDecisionService;
 import org.isolatedareas.helphub.domain.FulfillmentMethod;
 import org.isolatedareas.helphub.domain.RequestStatus;
 import org.isolatedareas.helphub.domain.Urgency;
@@ -18,7 +17,7 @@ import org.isolatedareas.helphub.inventory.InventoryRepository;
 import org.isolatedareas.helphub.inventory.ReservationService;
 import org.isolatedareas.helphub.requests.CreateSupplyRequest;
 import org.isolatedareas.helphub.requests.ServiceWindow;
-import org.isolatedareas.helphub.requests.RequestService;
+import org.isolatedareas.helphub.requests.SubmissionService;
 import org.isolatedareas.helphub.requests.SupplyRequestRepository;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -29,21 +28,19 @@ public class AssistantToolExecutor {
 
     private final InventoryRepository inventory;
     private final SupplyRequestRepository requests;
-    private final RequestService requestService;
     private final ReservationService reservations;
     private final JdbcClient jdbc;
     private final ConfirmationService confirmations;
     private final Validator validator;
-    private final AutoDecisionService decisions;
+    private final SubmissionService submissions;
 
     public AssistantToolExecutor(InventoryRepository inventory, SupplyRequestRepository requests,
-                                 RequestService requestService, ReservationService reservations,
+                                 ReservationService reservations,
                                  JdbcClient jdbc, ConfirmationService confirmations,
-                                 Validator validator, AutoDecisionService decisions) {
-        this.decisions = decisions;
+                                 Validator validator, SubmissionService submissions) {
+        this.submissions = submissions;
         this.inventory = inventory;
         this.requests = requests;
-        this.requestService = requestService;
         this.reservations = reservations;
         this.jdbc = jdbc;
         this.confirmations = confirmations;
@@ -117,7 +114,7 @@ public class AssistantToolExecutor {
     }
 
     private Object createRequest(long userId, JsonNode args) {
-        return decisions.decide(requestService.create(userId, requestInput(args)).id());
+        return submissions.submit(userId, null, requestInput(args));
     }
 
     private static String urgencyName(Urgency urgency) {

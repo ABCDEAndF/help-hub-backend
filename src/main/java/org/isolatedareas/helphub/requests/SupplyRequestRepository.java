@@ -31,19 +31,23 @@ public class SupplyRequestRepository {
 
     public long insert(long residentId, CreateSupplyRequest input) {
         org.springframework.jdbc.support.GeneratedKeyHolder keys = new org.springframework.jdbc.support.GeneratedKeyHolder();
-        // Serialises a resident's own submissions so their request numbers never collide.
-        jdbc.sql("SELECT id FROM users WHERE id=:residentId FOR UPDATE").param("residentId", residentId)
-            .query(Long.class).optional();
+        // Takes the resident's next number on their own row: this serialises only that resident's
+        // submissions, so numbers never collide, and locks nothing other residents need.
+        int updated = jdbc.sql("UPDATE users SET request_seq = request_seq + 1 WHERE id=:residentId")
+            .param("residentId", residentId).update();
+        if (updated != 1) throw new IllegalStateException("Resident " + residentId + " not found");
+        int seq = jdbc.sql("SELECT request_seq FROM users WHERE id=:residentId").param("residentId", residentId)
+            .query(Integer.class).single();
         jdbc.sql("""
                 INSERT INTO supply_requests
                   (resident_id, resident_seq, category, inventory_item_id, item_description, quantity, urgency,
                    fulfillment_method, latitude, longitude, approximate_address, accessibility_notes,
                    preferred_start, preferred_end)
-                SELECT :residentId, COALESCE(MAX(resident_seq), 0) + 1, :category, :inventoryItemId, :description,
+                VALUES (:residentId, :seq, :category, :inventoryItemId, :description,
                   :quantity, :urgency, :fulfillmentMethod, :latitude, :longitude, :address, :notes,
-                  :preferredStart, :preferredEnd
-                FROM supply_requests WHERE resident_id = :residentId
+                  :preferredStart, :preferredEnd)
                 """)
+            .param("seq", seq)
             .param("residentId", residentId)
             .param("category", input.category())
             .param("inventoryItemId", input.inventoryItemId())

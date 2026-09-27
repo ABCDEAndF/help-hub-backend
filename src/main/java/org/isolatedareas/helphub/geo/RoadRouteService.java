@@ -27,6 +27,9 @@ import org.springframework.web.client.RestClient;
 public class RoadRouteService {
     private static final Logger log = LoggerFactory.getLogger(RoadRouteService.class);
     private static final String DRIVING_PATH = "/ws/direction/v1/driving/";
+    /** After a failure (quota, network) a leg is not asked for again for a while; screens refresh every 10 s. */
+    private static final java.time.Duration RETRY_AFTER = java.time.Duration.ofMinutes(10);
+    private final java.util.Map<String, java.time.Instant> failedUntil = new java.util.concurrent.ConcurrentHashMap<>();
 
     private final JdbcClient jdbc;
     private final ObjectMapper json;
@@ -56,6 +59,8 @@ public class RoadRouteService {
             .query(String.class).optional();
         try {
             if (cached.isPresent()) return parse(cached.get());
+            java.time.Instant blocked = failedUntil.get(legKey);
+            if (blocked != null && blocked.isAfter(java.time.Instant.now())) return straight;
             Fetched fetched = fetch(fromLat, fromLon, toLat, toLon);
             jdbc.sql("""
                     INSERT INTO road_legs (leg_key, distance_meters, duration_seconds, path)
@@ -66,12 +71,13 @@ public class RoadRouteService {
                 .update();
             return fetched.path();
         } catch (Exception error) {
+            failedUntil.put(legKey, java.time.Instant.now().plus(RETRY_AFTER));
             log.warn("Road route {} unavailable, drawing a straight line: {}", legKey, error.getMessage());
             return straight;
         }
     }
 
-    private Fetched fetch(double fromLat, double fromLon, double toLat, double toLon) throws Exception {
+    Fetched fetch(double fromLat, double fromLon, double toLat, double toLon) throws Exception {
         String from = String.format(Locale.ROOT, "%.6f,%.6f", fromLat, fromLon);
         String to = String.format(Locale.ROOT, "%.6f,%.6f", toLat, toLon);
         // Parameters in ascending name order, as the signature requires.
