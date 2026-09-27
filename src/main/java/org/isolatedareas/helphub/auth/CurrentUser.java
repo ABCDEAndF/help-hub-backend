@@ -9,5 +9,10 @@ public final class CurrentUser {
     public static long id(Jwt jwt) {
         return Long.parseLong(jwt.getSubject());
     }
+
+    public static boolean isAdmin(Jwt jwt) {
+        java.util.List<String> roles = jwt.getClaimAsStringList("roles");
+        return roles != null && roles.contains("ADMIN");
+    }
 }
 

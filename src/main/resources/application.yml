@@ -96,6 +96,10 @@ app:
     api-v3-key: ${WECHAT_PAY_API_V3_KEY:}
     payment-notify-url: ${WECHAT_PAY_NOTIFY_URL:}
     refund-notify-url: ${WECHAT_PAY_REFUND_NOTIFY_URL:}
+  road-routing:
+    # Tencent Location Service WebService key (lbs.qq.com); without it routes are drawn as straight lines.
+    tencent-key: ${TENCENT_MAP_KEY:}
+    tencent-secret: ${TENCENT_MAP_SK:}
   rate-limit:
     requests-per-minute: ${RATE_LIMIT_PER_MINUTE:120}
   outbox:

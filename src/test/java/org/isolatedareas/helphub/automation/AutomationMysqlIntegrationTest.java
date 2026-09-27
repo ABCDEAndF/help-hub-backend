@@ -121,7 +121,8 @@ class AutomationMysqlIntegrationTest {
         // A cart nobody drives is never dispatched; each of the three carts gets its own courier.
         assertThat(trips.dispatchNeeded()).isFalse();
         var staffRepo = new org.isolatedareas.helphub.auth.UserRepository(jdbc);
-        var couriers = new CourierRouteService(jdbc, trips, staffRepo, audit);
+        var couriers = new CourierRouteService(jdbc, trips, staffRepo, audit,
+            new org.isolatedareas.helphub.geo.RoadRouteService(jdbc, json, org.springframework.web.client.RestClient.builder(), "", ""));
         assertThat(couriers.carts()).extracting(CourierRouteService.CartCourier::code)
             .containsExactly("QP-CART-001", "QP-CART-002", "QP-CART-003");
         long[] courierIds = new long[3];
@@ -169,6 +170,15 @@ class AutomationMysqlIntegrationTest {
         assertThat(route.legs().get(2).fromName()).isEqualTo("测试居民😀（第 4 个申请）");
         assertThat(route.legs().get(2).toName()).startsWith("返回：");
         assertThat(couriers.routeFor(courierIds[0], Instant.now()).statusText()).startsWith("暂无配送任务");
+        // Without a map key every leg is the straight line between its ends.
+        assertThat(route.legs()).allSatisfy(leg -> assertThat(leg.path()).hasSize(2));
+        // Couriers see and act on only their own cart; administrators on everything.
+        assertThat(couriers.courierCart(jwt(courierIds[1], "OPERATOR"))).contains(scheduled.assignedCartId());
+        assertThat(couriers.courierCart(jwt(courierIds[1], "ADMIN"))).isEmpty();
+        couriers.requireOwnRequest(jwt(courierIds[1], "OPERATOR"), delivery.id());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> couriers.requireOwnRequest(jwt(courierIds[0], "OPERATOR"), delivery.id()))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class).hasMessageContaining("403");
+        assertThat(requests.findForCart(scheduled.assignedCartId(), 100, 0)).extracting(SupplyRequestView::id).containsExactly(delivery.id());
 
         long tripId = jdbc.sql("SELECT id FROM cart_trips WHERE status='ACTIVE'").query(Long.class).single();
         tx.executeWithoutResult(s -> trips.advanceTrip(tripId, Instant.now().plusSeconds(3 * 3600)));
@@ -275,6 +285,11 @@ class AutomationMysqlIntegrationTest {
         assertThat(users.staffPasswordHash("kd001")).contains("$2a$10$reset");
         assertThat(users.staff()).extracting(org.isolatedareas.helphub.auth.UserAccount::phone).contains("kd001");
         assertThat(users.staffPasswordHash("it-resident")).isEmpty();
+    }
+
+    private static org.springframework.security.oauth2.jwt.Jwt jwt(long userId, String role) {
+        return org.springframework.security.oauth2.jwt.Jwt.withTokenValue("test").header("alg", "none")
+            .subject(Long.toString(userId)).claim("roles", java.util.List.of(role)).build();
     }
 
     private static long itemId(JdbcClient jdbc, String sku) {

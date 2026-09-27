@@ -5,13 +5,16 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.isolatedareas.helphub.audit.AuditService;
+import org.isolatedareas.helphub.auth.CurrentUser;
 import org.isolatedareas.helphub.auth.UserAccount;
 import org.isolatedareas.helphub.auth.UserRepository;
 import org.isolatedareas.helphub.domain.Role;
 import org.isolatedareas.helphub.geo.GeoMath;
+import org.isolatedareas.helphub.geo.RoadRouteService;
 import org.isolatedareas.helphub.requests.ServiceWindow;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -30,12 +33,33 @@ public class CourierRouteService {
     private final CartTripService trips;
     private final UserRepository users;
     private final AuditService audit;
+    private final RoadRouteService roads;
 
-    public CourierRouteService(JdbcClient jdbc, CartTripService trips, UserRepository users, AuditService audit) {
+    public CourierRouteService(JdbcClient jdbc, CartTripService trips, UserRepository users, AuditService audit,
+                               RoadRouteService roads) {
+        this.roads = roads;
         this.jdbc = jdbc;
         this.trips = trips;
         this.users = users;
         this.audit = audit;
+    }
+
+    /** The cart a non-admin staff member drives; empty for administrators and staff without a cart. */
+    public Optional<Long> courierCart(Jwt jwt) {
+        if (CurrentUser.isAdmin(jwt)) return Optional.empty();
+        return jdbc.sql("SELECT id FROM mobile_carts WHERE courier_id=:courier").param("courier", CurrentUser.id(jwt))
+            .query(Long.class).optional();
+    }
+
+    /** Couriers may act only on requests delivered by their own cart. */
+    public void requireOwnRequest(Jwt jwt, long requestId) {
+        Optional<Long> cart = courierCart(jwt);
+        if (cart.isEmpty()) return;
+        Long assigned = jdbc.sql("SELECT assigned_cart_id FROM supply_requests WHERE id=:id").param("id", requestId)
+            .query(Long.class).optional().orElse(null);
+        if (!cart.get().equals(assigned)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只能处理分配给自己车辆的配送单");
+        }
     }
 
     public List<CartCourier> carts() {
@@ -136,7 +160,8 @@ public class CourierRouteService {
                 }
             }
             legs.add(new Leg(stop.order(), stop.type(), fromName, fromLat, fromLon, toName, toAddress,
-                stop.latitude(), stop.longitude(), stop.arriveAt(), state, details));
+                stop.latitude(), stop.longitude(), stop.arriveAt(), state, details,
+                roads.path(fromLat, fromLon, stop.latitude(), stop.longitude())));
             fromName = "PICKUP".equals(stop.type()) || "RETURN".equals(stop.type()) ? stop.pointName()
                 : toName.substring("送达：".length());
             fromLat = stop.latitude();
@@ -146,6 +171,16 @@ public class CourierRouteService {
         double lat = motion == null ? cart.latitude() : motion.latitude();
         double lon = motion == null ? cart.longitude() : motion.longitude();
         String status = motion == null ? "配送中" : motion.statusText();
+        // The trip schedule moves the cart in a straight line; show it the same share of the way along the road.
+        Optional<Leg> current = legs.stream().filter(leg -> "CURRENT".equals(leg.state())).findFirst();
+        if (current.isPresent()) {
+            Leg leg = current.get();
+            double whole = GeoMath.distanceMeters(leg.fromLatitude(), leg.fromLongitude(), leg.toLatitude(), leg.toLongitude());
+            double done = GeoMath.distanceMeters(leg.fromLatitude(), leg.fromLongitude(), lat, lon);
+            double[] onRoad = RoadRouteService.along(leg.path(), whole <= 0 ? 1 : done / whole);
+            lat = onRoad[0];
+            lon = onRoad[1];
+        }
         return new CourierRoute(true, cart.id(), cart.name(), status, lat, lon, trip.get().id(), legs);
     }
 
@@ -207,10 +242,10 @@ public class CourierRouteService {
     public record CartCourier(long id, String code, String name, String status, String courierAccount,
                               String courierName) {
     }
-    /** state: DONE, CURRENT (the leg being driven now) or UPCOMING. */
+    /** state: DONE, CURRENT (the leg being driven now) or UPCOMING; path follows the roads when available. */
     public record Leg(int order, String type, String fromName, double fromLatitude, double fromLongitude,
                       String toName, String toAddress, double toLatitude, double toLongitude, Instant arriveAt,
-                      String state, List<String> details) {
+                      String state, List<String> details, List<double[]> path) {
     }
     public record CourierRoute(boolean assigned, Long cartId, String cartName, String statusText, Double latitude,
                                Double longitude, Long tripId, List<Leg> legs) {

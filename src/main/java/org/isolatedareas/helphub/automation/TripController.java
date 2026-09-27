@@ -37,12 +37,16 @@ public class TripController {
     /** Courier closes a delivery without the resident's code; the resident may appeal by phone. */
     @PostMapping("/admin/requests/{id}/mark-delivered")
     void markDelivered(@AuthenticationPrincipal Jwt jwt, @PathVariable long id) {
+        couriers.requireOwnRequest(jwt, id);
         trips.markDelivered(id, CurrentUser.id(jwt));
     }
 
     @GetMapping("/admin/trips")
-    List<CartTripService.AdminTrip> activeTrips() {
-        return trips.adminTrips(Instant.now());
+    List<CartTripService.AdminTrip> activeTrips(@AuthenticationPrincipal Jwt jwt) {
+        // A courier sees only their own cart's trip.
+        var cart = couriers.courierCart(jwt);
+        return trips.adminTrips(Instant.now()).stream()
+            .filter(trip -> cart.isEmpty() || trip.cartId() == cart.get()).toList();
     }
 
     /** The signed-in courier's own cart and its current trip, leg by leg. */

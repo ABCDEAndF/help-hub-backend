@@ -85,6 +85,12 @@ public class SupplyRequestRepository {
             .query(mapper()).list();
     }
 
+    /** What one courier handles: the requests on their own cart, newest first. */
+    public List<SupplyRequestView> findForCart(long cartId, int limit, int offset) {
+        return jdbc.sql(SELECT + " WHERE r.assigned_cart_id=:cart ORDER BY r.created_at DESC LIMIT :limit OFFSET :offset")
+            .param("cart", cartId).param("limit", limit).param("offset", offset).query(mapper()).list();
+    }
+
     public List<SupplyRequestView> findForOperations(RequestStatus status, int limit, int offset) {
         if (status == null) {
             return jdbc.sql(SELECT + " ORDER BY FIELD(r.urgency,'CRITICAL','HIGH','NORMAL','LOW'), r.created_at LIMIT :limit OFFSET :offset")

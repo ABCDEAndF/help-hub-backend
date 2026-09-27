@@ -7,6 +7,7 @@ import java.util.List;
 import org.isolatedareas.helphub.auth.CurrentUser;
 import org.isolatedareas.helphub.automation.CartTripService;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -29,6 +30,7 @@ public class RoutePlanningController {
     }
 
     @PostMapping
+    @PreAuthorize("hasRole('ADMIN')")
     RoutePlanningService.RoutePlanView create(
         @AuthenticationPrincipal Jwt jwt,
         @Valid @RequestBody PlanRequest input
