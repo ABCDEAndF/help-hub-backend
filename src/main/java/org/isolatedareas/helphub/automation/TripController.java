@@ -4,11 +4,14 @@ import java.time.Instant;
 import java.util.List;
 import org.isolatedareas.helphub.auth.CurrentUser;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
@@ -17,9 +20,11 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api")
 public class TripController {
     private final CartTripService trips;
+    private final CourierRouteService couriers;
 
-    public TripController(CartTripService trips) {
+    public TripController(CartTripService trips, CourierRouteService couriers) {
         this.trips = trips;
+        this.couriers = couriers;
     }
 
     /** The cart delivering the caller's own request: position, ETA and a path that shows only their stop. */
@@ -38,5 +43,27 @@ public class TripController {
     @GetMapping("/admin/trips")
     List<CartTripService.AdminTrip> activeTrips() {
         return trips.adminTrips(Instant.now());
+    }
+
+    /** The signed-in courier's own cart and its current trip, leg by leg. */
+    @GetMapping("/admin/my-route")
+    CourierRouteService.CourierRoute myRoute(@AuthenticationPrincipal Jwt jwt) {
+        return couriers.routeFor(CurrentUser.id(jwt), Instant.now());
+    }
+
+    @GetMapping("/admin/carts")
+    List<CourierRouteService.CartCourier> carts() {
+        return couriers.carts();
+    }
+
+    /** One courier per cart; a blank account leaves the cart without a courier, so it is not dispatched. */
+    @PutMapping("/admin/carts/{id}/courier")
+    @PreAuthorize("hasRole('ADMIN')")
+    CourierRouteService.CartCourier assignCourier(@AuthenticationPrincipal Jwt jwt, @PathVariable long id,
+                                                  @RequestBody CourierInput input) {
+        return couriers.assign(CurrentUser.id(jwt), id, input.account());
+    }
+
+    public record CourierInput(String account) {
     }
 }

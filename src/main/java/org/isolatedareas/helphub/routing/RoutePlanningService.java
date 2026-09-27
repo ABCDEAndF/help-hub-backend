@@ -105,7 +105,10 @@ public class RoutePlanningService {
         return jdbc.sql("""
                 SELECT id, service_date, status, objective_distance_meters, baseline_distance_meters,
                   requested_by, created_at, completed_at, error_message
-                FROM route_plans ORDER BY created_at DESC LIMIT 100
+                FROM route_plans p
+                WHERE status IN ('PENDING','COMPUTING','FAILED')
+                  OR EXISTS (SELECT 1 FROM route_stops s WHERE s.route_plan_id = p.id)
+                ORDER BY created_at DESC LIMIT 100
                 """)
             .query((rs, n) -> new RoutePlanSummary(rs.getLong("id"), rs.getDate("service_date").toLocalDate(),
                 rs.getString("status"), nullableInt(rs, "objective_distance_meters"),

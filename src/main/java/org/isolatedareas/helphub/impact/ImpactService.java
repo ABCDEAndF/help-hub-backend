@@ -38,7 +38,8 @@ public class ImpactService {
                 SELECT COALESCE(SUM(objective_distance_meters),0) AS optimized,
                   COALESCE(SUM(baseline_distance_meters),0) AS baseline,
                   COUNT(*) AS routes
-                FROM route_plans WHERE status IN ('READY','DISPATCHED','COMPLETED')
+                FROM route_plans p WHERE status IN ('READY','DISPATCHED','COMPLETED')
+                  AND EXISTS (SELECT 1 FROM route_stops s WHERE s.route_plan_id = p.id)
                 """).query((rs, n) -> new RouteImpact(rs.getLong("routes"), rs.getLong("optimized"),
                 rs.getLong("baseline"))).single();
         FeedbackImpact feedback = jdbc.sql("""

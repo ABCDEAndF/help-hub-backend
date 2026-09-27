@@ -24,9 +24,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Turns reserved delivery requests into simulated cart trips and plays them out: carts
- * collect stock at service points, deliver, and return. There are no drivers, so reaching a
- * delivery stop completes the handover (the resident is notified), as the project owner chose.
+ * Turns reserved delivery requests into cart trips and plays them out on the planned schedule:
+ * carts collect stock at service points, deliver, and return. Only carts with a courier are
+ * dispatched, and each courier sees their cart's route leg by leg. Reaching a delivery stop on
+ * schedule completes the handover (the resident is notified), as the project owner chose.
  */
 @Service
 public class CartTripService {
@@ -55,8 +56,10 @@ public class CartTripService {
 
     /** True when an idle cart and a reserved, approved delivery request are both waiting. */
     public boolean dispatchNeeded() {
-        return jdbc.sql("SELECT COUNT(*) FROM mobile_carts WHERE status='AVAILABLE' AND latitude IS NOT NULL")
-            .query(Integer.class).single() > 0 && !pendingJobs(false).isEmpty();
+        return jdbc.sql("""
+                SELECT COUNT(*) FROM mobile_carts
+                WHERE status='AVAILABLE' AND latitude IS NOT NULL AND courier_id IS NOT NULL
+                """).query(Integer.class).single() > 0 && !pendingJobs(false).isEmpty();
     }
 
     /** Plans and starts trips for every dispatchable delivery; called by the RabbitMQ route consumer. */
@@ -64,7 +67,8 @@ public class CartTripService {
     public PlanOutcome planTrips(Long routePlanId) {
         List<DeliveryDispatchAlgorithm.Cart> carts = jdbc.sql("""
                 SELECT id, capacity_units, latitude, longitude FROM mobile_carts
-                WHERE status='AVAILABLE' AND latitude IS NOT NULL AND longitude IS NOT NULL ORDER BY id FOR UPDATE
+                WHERE status='AVAILABLE' AND latitude IS NOT NULL AND longitude IS NOT NULL AND courier_id IS NOT NULL
+                ORDER BY id FOR UPDATE
                 """)
             .query((rs, n) -> new DeliveryDispatchAlgorithm.Cart(rs.getLong("id"), rs.getInt("capacity_units"),
                 rs.getDouble("latitude"), rs.getDouble("longitude"))).list();

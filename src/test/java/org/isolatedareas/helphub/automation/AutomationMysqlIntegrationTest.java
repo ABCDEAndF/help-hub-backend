@@ -118,6 +118,20 @@ class AutomationMysqlIntegrationTest {
         SupplyRequestView delivery = tx.execute(s -> decisions.decide(requestService.create(resident,
             request(industrialRice, 1, FulfillmentMethod.DELIVERY)).id()));
         assertThat(delivery.status()).isEqualTo(RequestStatus.APPROVED);
+        // A cart nobody drives is never dispatched; each of the three carts gets its own courier.
+        assertThat(trips.dispatchNeeded()).isFalse();
+        var staffRepo = new org.isolatedareas.helphub.auth.UserRepository(jdbc);
+        var couriers = new CourierRouteService(jdbc, trips, staffRepo, audit);
+        assertThat(couriers.carts()).extracting(CourierRouteService.CartCourier::code)
+            .containsExactly("QP-CART-001", "QP-CART-002", "QP-CART-003");
+        long[] courierIds = new long[3];
+        for (int index = 0; index < 3; index++) {
+            String account = "kd00" + (index + 1);
+            courierIds[index] = staffRepo.upsertStaff(account, "快递员" + (index + 1), "$2a$10$courier").id();
+            long cartId = couriers.carts().get(index).id();
+            assertThat(tx.execute(s -> couriers.assign(system.id(), cartId, account)).courierAccount()).isEqualTo(account);
+        }
+        assertThat(couriers.routeFor(resident, Instant.now()).assigned()).isFalse();
         assertThat(trips.dispatchNeeded()).isTrue();
         CartTripService.PlanOutcome outcome = tx.execute(s -> trips.planTrips(null));
         assertThat(outcome.assignedRequestIds()).containsExactly(delivery.id());
@@ -137,6 +151,25 @@ class AutomationMysqlIntegrationTest {
             .satisfies(trip -> assertThat(trip.stops()).extracting(CartTripService.AdminStop::type)
                 .containsExactly("PICKUP", "DROPOFF", "RETURN"));
 
+        // The courier of cart two sees every leg with where to go and what to load or hand over.
+        var route = couriers.routeFor(courierIds[1], Instant.now());
+        assertThat(route.assigned()).isTrue();
+        assertThat(route.cartName()).isEqualTo("青浦公益补给车二号");
+        assertThat(route.legs()).extracting(CourierRouteService.Leg::type).containsExactly("PICKUP", "DROPOFF", "RETURN");
+        assertThat(route.legs()).extracting(CourierRouteService.Leg::state).containsExactly("CURRENT", "UPCOMING", "UPCOMING");
+        var loadLeg = route.legs().get(0);
+        assertThat(loadLeg.fromName()).isEqualTo("邻需通·青浦工业园区公益服务点");
+        assertThat(loadLeg.toName()).isEqualTo("取货：邻需通·青浦工业园区公益服务点");
+        assertThat(loadLeg.details()).singleElement().asString().startsWith("装车：").contains("× 1", "测试居民😀");
+        var dropLeg = route.legs().get(1);
+        assertThat(dropLeg.fromName()).isEqualTo("邻需通·青浦工业园区公益服务点");
+        assertThat(dropLeg.toName()).isEqualTo("送达：测试居民😀（第 4 个申请）");
+        assertThat(dropLeg.toLatitude()).isEqualTo(NEAR_INDUSTRIAL_LAT.doubleValue());
+        assertThat(dropLeg.details()).anyMatch(line -> line.contains("× 1")).anyMatch(line -> line.contains("领取码"));
+        assertThat(route.legs().get(2).fromName()).isEqualTo("测试居民😀（第 4 个申请）");
+        assertThat(route.legs().get(2).toName()).startsWith("返回：");
+        assertThat(couriers.routeFor(courierIds[0], Instant.now()).statusText()).startsWith("暂无配送任务");
+
         long tripId = jdbc.sql("SELECT id FROM cart_trips WHERE status='ACTIVE'").query(Long.class).single();
         tx.executeWithoutResult(s -> trips.advanceTrip(tripId, Instant.now().plusSeconds(3 * 3600)));
         SupplyRequestView fulfilled = requestService.get(delivery.id());
@@ -150,6 +183,7 @@ class AutomationMysqlIntegrationTest {
             .query(Integer.class).single()).isEqualTo(99);
         assertThat(industrialRiceReserved.get()).isEqualTo(2);
         assertThat(trips.tracking(delivery.id(), resident, Instant.now()).orElseThrow().delivered()).isTrue();
+        assertThat(couriers.routeFor(courierIds[1], Instant.now()).legs()).isEmpty();
 
         // Cancelling the scheduled pickup releases the two bags it was holding.
         tx.execute(s -> requestService.transition(pickup.id(), system.id(),
@@ -235,6 +269,7 @@ class AutomationMysqlIntegrationTest {
         var users = new org.isolatedareas.helphub.auth.UserRepository(jdbc);
         var courierAccount = users.upsertStaff("kd001", "快递员1", "$2a$10$abcdefghijklmnopqrstuuJ4O3n2m1l0k9j8i7h6g5f4e3d2c1b0a");
         assertThat(courierAccount.role().name()).isEqualTo("OPERATOR");
+        assertThat(courierAccount.id()).isEqualTo(courierIds[0]);
         assertThat(users.staffPasswordHash("kd001")).hasValueSatisfying(hash -> assertThat(hash).startsWith("$2a$"));
         assertThat(users.upsertStaff("kd001", "快递员一号", "$2a$10$reset").displayName()).isEqualTo("快递员一号");
         assertThat(users.staffPasswordHash("kd001")).contains("$2a$10$reset");
