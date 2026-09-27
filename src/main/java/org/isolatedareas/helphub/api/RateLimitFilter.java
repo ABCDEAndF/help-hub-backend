@@ -43,10 +43,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
         throws ServletException, IOException {
-        String forwarded = request.getHeader("X-Forwarded-For");
-        String client = forwarded == null ? request.getRemoteAddr() : forwarded.split(",")[0].trim();
         long window = System.currentTimeMillis() / 60_000L;
-        String key = "rate:" + client + ":" + window;
+        String key = "rate:" + clientKey(request) + ":" + window;
         Long value = redis.execute(INCREMENT, Collections.singletonList(key), "120");
         long count = value == null ? 1L : value;
         response.setHeader("X-RateLimit-Limit", Integer.toString(limit));
@@ -58,5 +56,17 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return;
         }
         chain.doFilter(request, response);
+    }
+
+    /**
+     * Mini-program calls reach CloudRun through WeChat's gateway, which names the user in
+     * X-WX-OPENID; the address they come from may be shared by every resident (or a whole mobile
+     * carrier's NAT), so each WeChat user gets their own budget. Other callers are counted by address.
+     */
+    static String clientKey(HttpServletRequest request) {
+        String openId = request.getHeader("X-WX-OPENID");
+        if (openId != null && !openId.isBlank()) return "wx:" + openId.trim();
+        String forwarded = request.getHeader("X-Forwarded-For");
+        return "ip:" + (forwarded == null ? request.getRemoteAddr() : forwarded.split(",")[0].trim());
     }
 }

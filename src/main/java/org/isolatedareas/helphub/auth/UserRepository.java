@@ -80,11 +80,11 @@ public class UserRepository {
             .optional();
     }
 
+    /** Creates a resident on first sign-in; a returning resident keeps the name they chose. */
     public UserAccount upsertWechatUser(String openId, String displayName) {
         jdbc.sql("""
-                INSERT INTO users (wechat_open_id, display_name, role)
+                INSERT IGNORE INTO users (wechat_open_id, display_name, role)
                 VALUES (:openId, :displayName, 'RESIDENT')
-                ON DUPLICATE KEY UPDATE display_name = VALUES(display_name)
                 """)
             .param("openId", openId)
             .param("displayName", displayName)
