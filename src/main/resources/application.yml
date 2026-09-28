@@ -68,6 +68,9 @@ app:
   simulation:
     # Daily activity of every signed-in resident (simulation/ResidentActivitySimulator); on in production.
     enabled: ${RESIDENT_SIMULATION_ENABLED:false}
+  inventory:
+    # Morning refill of free items below their reorder threshold (inventory/DailyRestock); on in production.
+    daily-restock: ${DAILY_RESTOCK_ENABLED:false}
   pickup-code-secret: ${PICKUP_CODE_SECRET:local-pickup-code-secret-change-me-now}
   cors:
     allowed-origin-patterns: ${CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*}

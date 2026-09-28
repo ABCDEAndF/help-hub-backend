@@ -89,6 +89,10 @@ class ResidentActivityMysqlIntegrationTest {
         jdbc.sql("INSERT INTO users (wechat_open_id, display_name, created_at) VALUES ('sim-it-old', '老居民', :at)")
             .param("at", Timestamp.from(now.minus(Duration.ofDays(120)))).update();
         long oldResident = jdbc.sql("SELECT id FROM users WHERE wechat_open_id='sim-it-old'").query(Long.class).single();
+        // Signed in by scripts/production-smoke.ps1, not by a person.
+        jdbc.sql("INSERT INTO users (wechat_open_id, display_name, created_at) VALUES ('production-smoke-it', '冒烟', :at)")
+            .param("at", signedIn).update();
+        long smokeResident = jdbc.sql("SELECT id FROM users WHERE wechat_open_id='production-smoke-it'").query(Long.class).single();
 
         simulator.assignMissingDefaultLocations();
         assertThat(jdbc.sql("SELECT COUNT(*) FROM users WHERE role='RESIDENT' AND home_latitude IS NULL")
@@ -100,6 +104,10 @@ class ResidentActivityMysqlIntegrationTest {
         int orders = jdbc.sql("SELECT COUNT(*) FROM supply_requests").query(Integer.class).single();
         assertThat(orders).isPositive();
         assertThat(jdbc.sql("SELECT COUNT(*) FROM supply_requests WHERE resident_id=:id").param("id", oldResident)
+            .query(Integer.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT COUNT(*) FROM supply_requests WHERE resident_id=:id").param("id", smokeResident)
+            .query(Integer.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT COUNT(*) FROM assistant_conversations WHERE user_id=:id").param("id", smokeResident)
             .query(Integer.class).single()).isZero();
         // Stocked items were decided automatically, exactly as for a request from the mini program.
         assertThat(jdbc.sql("""

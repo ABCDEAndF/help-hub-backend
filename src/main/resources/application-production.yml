@@ -14,6 +14,8 @@ server:
 app:
   simulation:
     enabled: ${RESIDENT_SIMULATION_ENABLED:true}
+  inventory:
+    daily-restock: ${DAILY_RESTOCK_ENABLED:true}
   pickup-code-secret: ${PICKUP_CODE_SECRET}
   cors:
     allowed-origin-patterns: ${CORS_ALLOWED_ORIGIN_PATTERNS:https://servicewechat.com}

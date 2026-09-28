@@ -48,6 +48,8 @@ public class ResidentActivitySimulator {
     private static final Duration LEASE = Duration.ofMinutes(3);
     /** After downtime, activities older than this are skipped instead of all firing at once. */
     static final Duration MAX_CATCH_UP = Duration.ofMinutes(15);
+    /** Identities scripts/production-smoke.ps1 signs in with; they are not people, so they are not acted out. */
+    static final String SMOKE_TEST_OPEN_IDS = "production-smoke-%";
 
     private final JdbcClient jdbc;
     private final SubmissionService submissions;
@@ -143,7 +145,7 @@ public class ResidentActivitySimulator {
         }
     }
 
-    /** Activities of every resident in their 90 days whose time falls in (from, to], in time order. */
+    /** Activities of every real resident in their 90 days whose time falls in (from, to], in time order. */
     List<DailyActivityPlanner.Activity> due(Instant from, Instant to) {
         LocalDate today = to.atZone(DailyActivityPlanner.ZONE).toLocalDate();
         if (!today.equals(plannedDay)) {
@@ -153,7 +155,8 @@ public class ResidentActivitySimulator {
         List<Resident> residents = jdbc.sql("""
                 SELECT id, created_at FROM users
                 WHERE role='RESIDENT' AND enabled=TRUE AND created_at > :since
-                """).param("since", Timestamp.from(to.minus(Duration.ofDays(ResidentPersona.SIMULATED_DAYS + 1))))
+                  AND (wechat_open_id IS NULL OR wechat_open_id NOT LIKE :smoke)
+                """).param("smoke", SMOKE_TEST_OPEN_IDS).param("since", Timestamp.from(to.minus(Duration.ofDays(ResidentPersona.SIMULATED_DAYS + 1))))
             .query((rs, n) -> new Resident(rs.getLong("id"), rs.getTimestamp("created_at").toInstant())).list();
         List<DailyActivityPlanner.Activity> due = new ArrayList<>();
         LocalDate fromDay = from.atZone(DailyActivityPlanner.ZONE).toLocalDate();
