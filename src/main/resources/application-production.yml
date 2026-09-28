@@ -12,6 +12,8 @@ server:
   port: 8080
 
 app:
+  simulation:
+    enabled: ${RESIDENT_SIMULATION_ENABLED:true}
   pickup-code-secret: ${PICKUP_CODE_SECRET}
   cors:
     allowed-origin-patterns: ${CORS_ALLOWED_ORIGIN_PATTERNS:https://servicewechat.com}
