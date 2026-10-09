@@ -97,7 +97,13 @@ public class SupplyRequestRepository {
 
     public List<SupplyRequestView> findForOperations(RequestStatus status, int limit, int offset) {
         if (status == null) {
-            return jdbc.sql(SELECT + " ORDER BY FIELD(r.urgency,'CRITICAL','HIGH','NORMAL','LOW'), r.created_at LIMIT :limit OFFSET :offset")
+            // The staff queue: only requests still in progress, those waiting for a decision first.
+            // Finished ones would otherwise fill the page and push new requests out of sight.
+            return jdbc.sql(SELECT + """
+                     WHERE r.status IN ('SUBMITTED','UNDER_REVIEW','APPROVED','SCHEDULED')
+                     ORDER BY r.status NOT IN ('SUBMITTED','UNDER_REVIEW'), FIELD(r.urgency,'CRITICAL','HIGH','NORMAL','LOW'),
+                       r.created_at LIMIT :limit OFFSET :offset
+                    """)
                 .param("limit", limit).param("offset", offset).query(mapper()).list();
         }
         return jdbc.sql(SELECT + " WHERE r.status=:status ORDER BY FIELD(r.urgency,'CRITICAL','HIGH','NORMAL','LOW'), r.created_at LIMIT :limit OFFSET :offset")

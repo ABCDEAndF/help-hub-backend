@@ -285,6 +285,18 @@ class AutomationMysqlIntegrationTest {
             new RequestService.TransitionRequest(RequestStatus.CANCELLED, null, null)));
         assertThat(industrialRiceReserved.get()).isZero();
 
+        // The staff queue holds only open requests, those waiting for a decision first.
+        SupplyRequestView waiting = tx.execute(s -> decisions.submitted(requestService.create(resident,
+            request(industrialRice, 1, FulfillmentMethod.PICKUP)).id()));
+        var queue = requests.findForOperations(null, 100, 0);
+        assertThat(queue).extracting(SupplyRequestView::status)
+            .doesNotContain(RequestStatus.FULFILLED, RequestStatus.REJECTED, RequestStatus.CANCELLED);
+        assertThat(queue).extracting(SupplyRequestView::id).contains(waiting.id());
+        var pendingFirst = queue.stream().map(view -> view.status() == RequestStatus.SUBMITTED || view.status() == RequestStatus.UNDER_REVIEW).toList();
+        assertThat(pendingFirst).isSortedAccordingTo(java.util.Comparator.reverseOrder());
+        tx.execute(s -> requestService.transition(waiting.id(), system.id(),
+            new RequestService.TransitionRequest(RequestStatus.CANCELLED, null, null)));
+
         // Every resident's own numbering starts at 1.
         jdbc.sql("INSERT INTO users (wechat_open_id, display_name) VALUES ('it-neighbour', '邻居')").update();
         long neighbour = jdbc.sql("SELECT id FROM users WHERE wechat_open_id='it-neighbour'").query(Long.class).single();
