@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Optional;
 import org.isolatedareas.helphub.auth.CurrentUser;
+import org.isolatedareas.helphub.automation.ApprovalService;
 import org.isolatedareas.helphub.automation.CourierRouteService;
 import org.isolatedareas.helphub.domain.RequestStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -22,11 +23,14 @@ public class AdminRequestController {
     private final RequestService service;
     private final SupplyRequestRepository requests;
     private final CourierRouteService couriers;
+    private final ApprovalService approvals;
 
-    public AdminRequestController(RequestService service, SupplyRequestRepository requests, CourierRouteService couriers) {
+    public AdminRequestController(RequestService service, SupplyRequestRepository requests, CourierRouteService couriers,
+                                  ApprovalService approvals) {
         this.service = service;
         this.requests = requests;
         this.couriers = couriers;
+        this.approvals = approvals;
     }
 
     @GetMapping
@@ -50,6 +54,8 @@ public class AdminRequestController {
         @Valid @RequestBody RequestService.TransitionRequest input
     ) {
         couriers.requireOwnRequest(jwt, id);
+        // Approval is never automatic: it is this explicit staff action, and it reserves the stock.
+        if (input.status() == RequestStatus.APPROVED) return approvals.approve(id, CurrentUser.id(jwt));
         return service.transition(id, CurrentUser.id(jwt), input);
     }
 }

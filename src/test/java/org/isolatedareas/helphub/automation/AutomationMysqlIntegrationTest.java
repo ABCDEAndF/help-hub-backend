@@ -32,7 +32,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Runs the automatic approval, reservation, cart dispatch and simulated delivery against a
+ * Runs staff approval, reservation, cart dispatch and simulated delivery against a
  * real MySQL database migrated with the production migrations (set REPRO_MYSQL_URL,
  * REPRO_MYSQL_USER and REPRO_MYSQL_PASSWORD).
  */
@@ -43,7 +43,7 @@ class AutomationMysqlIntegrationTest {
     private static final BigDecimal NEAR_INDUSTRIAL_LON = new BigDecimal("121.0950");
 
     @Test
-    void approvesReservesDispatchesAndDeliversAutomatically() {
+    void approvalReservesThenDispatchesAndDelivers() {
         var ds = new DriverManagerDataSource(System.getenv("REPRO_MYSQL_URL"),
             System.getenv("REPRO_MYSQL_USER"), System.getenv("REPRO_MYSQL_PASSWORD"));
         Flyway.configure().dataSource(ds).locations("classpath:db/migration").cleanDisabled(false).load().clean();
@@ -64,7 +64,7 @@ class AutomationMysqlIntegrationTest {
         var reservations = new ReservationService(jdbc, new InventoryRepository(jdbc), requests,
             mock(StringRedisTemplate.class, RETURNS_DEEP_STUBS), outbox, audit, publisher,
             "integration-test-pickup-code-secret-0123456789");
-        var decisions = new AutoDecisionService(jdbc, requests, requestService, reservations, system);
+        var decisions = new ApprovalService(jdbc, requests, requestService, reservations);
         var trips = new CartTripService(jdbc, requestService, requests, reservations, system);
         var tx = new TransactionTemplate(new DataSourceTransactionManager(ds));
 
@@ -85,28 +85,45 @@ class AutomationMysqlIntegrationTest {
 
         // Pickup: the Xiayang rice was chosen, but the resident lives next to the industrial park,
         // so the same rice is reserved there and the request is scheduled at that point.
-        SupplyRequestView pickup = tx.execute(s -> decisions.decide(requestService.create(resident,
-            request(xiayangRice, 2, FulfillmentMethod.PICKUP)).id()));
+        SupplyRequestView pickup = tx.execute(s -> decisions.approve(requestService.create(resident,
+            request(xiayangRice, 2, FulfillmentMethod.PICKUP)).id(), system.id()));
         assertThat(pickup.status()).isEqualTo(RequestStatus.SCHEDULED);
         assertThat(pickup.residentNumber()).isEqualTo(1);
         assertThat(pickup.category()).isEqualTo("FOOD");
         assertThat(pickup.assignedServicePointName()).isEqualTo("邻需通·青浦工业园区公益服务点");
-        assertThat(pickup.decisionNote()).startsWith("已自动批准").contains("09:00–17:00");
+        assertThat(pickup.decisionNote()).startsWith("已批准").contains("09:00–17:00");
         assertThat(industrialRiceReserved.get()).isEqualTo(2);
 
-        // Not enough stock anywhere: rejected with the reason.
-        SupplyRequestView tooMany = tx.execute(s -> decisions.decide(requestService.create(resident,
+        // Not enough stock anywhere: the approval is refused with the reason and nothing changes.
+        SupplyRequestView tooMany = tx.execute(s -> decisions.submitted(requestService.create(resident,
             request(torch, 100, FulfillmentMethod.PICKUP)).id()));
-        assertThat(tooMany.status()).isEqualTo(RequestStatus.REJECTED);
+        assertThat(tooMany.status()).isEqualTo(RequestStatus.SUBMITTED);
         assertThat(tooMany.residentNumber()).isEqualTo(2);
-        assertThat(tooMany.decisionNote()).contains("库存不足", "25套");
+        assertThat(tooMany.decisionNote()).isEqualTo(ApprovalService.PENDING_NOTE);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx.execute(s -> decisions.approve(tooMany.id(), system.id())))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class).hasMessageContaining("库存不足").hasMessageContaining("25套");
+        assertThat(requestService.get(tooMany.id()).status()).isEqualTo(RequestStatus.SUBMITTED);
+        assertThat(jdbc.sql("SELECT COUNT(*) FROM reservations WHERE request_id=:id").param("id", tooMany.id())
+            .query(Integer.class).single()).isZero();
 
-        // Not a stocked item: left for an operator.
-        SupplyRequestView other = tx.execute(s -> decisions.decide(requestService.create(resident,
+        // Not a stocked item: waits for an operator, whose approval reserves nothing.
+        SupplyRequestView other = tx.execute(s -> decisions.submitted(requestService.create(resident,
             request(null, 1, FulfillmentMethod.DELIVERY)).id()));
         assertThat(other.status()).isEqualTo(RequestStatus.SUBMITTED);
-        assertThat(other.decisionNote()).isEqualTo(AutoDecisionService.MANUAL_NOTE);
+        assertThat(other.decisionNote()).isEqualTo(ApprovalService.MANUAL_NOTE);
+        SupplyRequestView otherApproved = tx.execute(s -> decisions.approve(other.id(), system.id()));
+        assertThat(otherApproved.status()).isEqualTo(RequestStatus.APPROVED);
+        assertThat(otherApproved.decisionNote()).isEqualTo(ApprovalService.MANUAL_APPROVED_NOTE);
         assertThat(other.itemDescription()).isEqualTo("集成测试🍚");
+        // A delivery more than 10 km from every service point is refused outright; a pickup is not.
+        var farAway = new CreateSupplyRequest("OTHER", "远处配送", 1, Urgency.NORMAL, new BigDecimal("31.3000"),
+            new BigDecimal("121.4000"), null, null, null, null, FulfillmentMethod.DELIVERY, industrialRice);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx.execute(s -> requestService.create(resident, farAway)))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class).hasMessageContaining("10 公里");
+        SupplyRequestView farPickup = tx.execute(s -> requestService.create(resident, new CreateSupplyRequest("OTHER", "远处自取", 1,
+            Urgency.NORMAL, new BigDecimal("31.3000"), new BigDecimal("121.4000"), null, null, null, null, FulfillmentMethod.PICKUP, null)));
+        tx.execute(s -> requestService.transition(farPickup.id(), system.id(),
+            new RequestService.TransitionRequest(RequestStatus.CANCELLED, null, null)));
         jdbc.sql("INSERT INTO assistant_conversations (id, user_id) VALUES ('00000000-0000-0000-0000-000000000001', :u)")
             .param("u", resident).update();
         jdbc.sql("""
@@ -115,8 +132,8 @@ class AutomationMysqlIntegrationTest {
                 """).update();
 
         // Delivery: approved with stock held, then the nearest cart collects and delivers it.
-        SupplyRequestView delivery = tx.execute(s -> decisions.decide(requestService.create(resident,
-            request(industrialRice, 1, FulfillmentMethod.DELIVERY)).id()));
+        SupplyRequestView delivery = tx.execute(s -> decisions.approve(requestService.create(resident,
+            request(industrialRice, 1, FulfillmentMethod.DELIVERY)).id(), system.id()));
         assertThat(delivery.status()).isEqualTo(RequestStatus.APPROVED);
         // A cart nobody drives is never dispatched; each of the three carts gets its own courier.
         assertThat(trips.dispatchNeeded()).isFalse();
@@ -164,10 +181,10 @@ class AutomationMysqlIntegrationTest {
         assertThat(loadLeg.details()).singleElement().asString().startsWith("装车：").contains("× 1", "测试居民😀");
         var dropLeg = route.legs().get(1);
         assertThat(dropLeg.fromName()).isEqualTo("邻需通·青浦工业园区公益服务点");
-        assertThat(dropLeg.toName()).isEqualTo("送达：测试居民😀（第 4 个申请）");
+        assertThat(dropLeg.toName()).isEqualTo("送达：测试居民😀（第 5 个申请）");
         assertThat(dropLeg.toLatitude()).isEqualTo(NEAR_INDUSTRIAL_LAT.doubleValue());
         assertThat(dropLeg.details()).anyMatch(line -> line.contains("× 1")).anyMatch(line -> line.contains("领取码"));
-        assertThat(route.legs().get(2).fromName()).isEqualTo("测试居民😀（第 4 个申请）");
+        assertThat(route.legs().get(2).fromName()).isEqualTo("测试居民😀（第 5 个申请）");
         assertThat(route.legs().get(2).toName()).startsWith("返回：");
         assertThat(couriers.routeFor(courierIds[0], Instant.now()).statusText()).startsWith("暂无配送任务");
         // Without a map key every leg is the straight line between its ends.
@@ -203,8 +220,8 @@ class AutomationMysqlIntegrationTest {
             .query(String.class).single()).isEqualTo("CANCELLED");
 
         // Staff verifying the pickup code completes the request; nobody has to mark it done.
-        SupplyRequestView torchPickup = tx.execute(s -> decisions.decide(requestService.create(resident,
-            request(torch, 1, FulfillmentMethod.PICKUP)).id()));
+        SupplyRequestView torchPickup = tx.execute(s -> decisions.approve(requestService.create(resident,
+            request(torch, 1, FulfillmentMethod.PICKUP)).id(), system.id()));
         var torchReservation = reservations.list(resident).stream()
             .filter(item -> item.requestId() == torchPickup.id()).findFirst().orElseThrow();
         assertThat(torchReservation.requestNumber()).isEqualTo(torchPickup.residentNumber());
@@ -217,8 +234,8 @@ class AutomationMysqlIntegrationTest {
         assertThat(collected.decisionNote()).contains("领取", "已完成");
 
         // A pickup code left unused past its hold cancels the request and frees the stock.
-        SupplyRequestView forgotten = tx.execute(s -> decisions.decide(requestService.create(resident,
-            request(industrialRice, 1, FulfillmentMethod.PICKUP)).id()));
+        SupplyRequestView forgotten = tx.execute(s -> decisions.approve(requestService.create(resident,
+            request(industrialRice, 1, FulfillmentMethod.PICKUP)).id(), system.id()));
         assertThat(industrialRiceReserved.get()).isEqualTo(1);
         jdbc.sql("UPDATE reservations SET expires_at = CURRENT_TIMESTAMP(3) - INTERVAL 1 MINUTE WHERE request_id=:id")
             .param("id", forgotten.id()).update();
@@ -229,8 +246,8 @@ class AutomationMysqlIntegrationTest {
         assertThat(industrialRiceReserved.get()).isZero();
 
         // A courier may close a delivery before the cart's simulated arrival; the cart then skips the stop.
-        SupplyRequestView courier = tx.execute(s -> decisions.decide(requestService.create(resident,
-            request(industrialRice, 1, FulfillmentMethod.DELIVERY)).id()));
+        SupplyRequestView courier = tx.execute(s -> decisions.approve(requestService.create(resident,
+            request(industrialRice, 1, FulfillmentMethod.DELIVERY)).id(), system.id()));
         tx.execute(s -> trips.planTrips(null));
         assertThat(requestService.get(courier.id()).status()).isEqualTo(RequestStatus.SCHEDULED);
         tx.executeWithoutResult(s -> trips.markDelivered(courier.id(), system.id()));
@@ -246,9 +263,9 @@ class AutomationMysqlIntegrationTest {
         var tomorrow = java.time.LocalDate.now(org.isolatedareas.helphub.requests.ServiceWindow.ZONE).plusDays(1);
         Instant afternoonStart = tomorrow.atTime(13, 0).atZone(org.isolatedareas.helphub.requests.ServiceWindow.ZONE).toInstant();
         Instant afternoonEnd = tomorrow.atTime(17, 0).atZone(org.isolatedareas.helphub.requests.ServiceWindow.ZONE).toInstant();
-        SupplyRequestView bookedPickup = tx.execute(s -> decisions.decide(requestService.create(resident,
+        SupplyRequestView bookedPickup = tx.execute(s -> decisions.approve(requestService.create(resident,
             new CreateSupplyRequest("OTHER", "预约自取", 1, Urgency.NORMAL, new BigDecimal("31.1520"), new BigDecimal("121.1300"),
-                null, null, afternoonStart, afternoonEnd, FulfillmentMethod.PICKUP, xiayangRice)).id()));
+                null, null, afternoonStart, afternoonEnd, FulfillmentMethod.PICKUP, xiayangRice)).id(), system.id()));
         assertThat(bookedPickup.status()).isEqualTo(RequestStatus.SCHEDULED);
         assertThat(bookedPickup.assignedServicePointName()).isEqualTo("邻需通·夏阳公益服务点");
         assertThat(bookedPickup.decisionNote()).contains("13:00–16:30");
@@ -258,9 +275,9 @@ class AutomationMysqlIntegrationTest {
         tx.execute(s -> requestService.transition(bookedPickup.id(), system.id(),
             new RequestService.TransitionRequest(RequestStatus.CANCELLED, null, null)));
 
-        SupplyRequestView bookedDelivery = tx.execute(s -> decisions.decide(requestService.create(resident,
+        SupplyRequestView bookedDelivery = tx.execute(s -> decisions.approve(requestService.create(resident,
             new CreateSupplyRequest("OTHER", "预约配送", 1, Urgency.NORMAL, NEAR_INDUSTRIAL_LAT, NEAR_INDUSTRIAL_LON,
-                null, null, afternoonStart, afternoonEnd, FulfillmentMethod.DELIVERY, industrialRice)).id()));
+                null, null, afternoonStart, afternoonEnd, FulfillmentMethod.DELIVERY, industrialRice)).id(), system.id()));
         assertThat(bookedDelivery.status()).isEqualTo(RequestStatus.APPROVED);
         assertThat(bookedDelivery.decisionNote()).contains("13:00–17:00", "送达");
         assertThat(trips.dispatchNeeded()).isFalse();

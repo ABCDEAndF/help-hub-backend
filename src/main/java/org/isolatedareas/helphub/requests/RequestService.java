@@ -14,6 +14,10 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class RequestService {
+    /** Carts deliver only this far (straight line) from the nearest active service point. */
+    public static final double DELIVERY_RADIUS_METERS = 10_000;
+    static final String OUT_OF_RANGE = "配送地址距离最近的服务点超过 10 公里，不在配送范围内。可改为到服务点自取，或更换地址。";
+
     private final SupplyRequestRepository requests;
     private final OutboxService outbox;
     private final AuditService audit;
@@ -29,6 +33,10 @@ public class RequestService {
     @Transactional
     public SupplyRequestView create(long residentId, CreateSupplyRequest input) {
         ServiceWindow.validate(input.preferredStart(), input.preferredEnd(), java.time.Instant.now());
+        if (input.fulfillmentMethod() == FulfillmentMethod.DELIVERY
+            && nearestServicePointMeters(input.latitude().doubleValue(), input.longitude().doubleValue()) > DELIVERY_RADIUS_METERS) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, OUT_OF_RANGE);
+        }
         if (input.inventoryItemId() != null) {
             // A request for a stocked item always takes that item's category, whatever the client sent.
             String category = jdbc.sql("SELECT category FROM inventory_items WHERE id=:id")
@@ -43,6 +51,14 @@ public class RequestService {
             Map.of("eventId", "request-created-" + id, "requestId", id, "recipientUserId", residentId,
                 "template", "REQUEST_RECEIVED", "requestNumber", created.residentNumber()));
         return created;
+    }
+
+    /** Straight-line distance to the nearest active service point; infinite when none is active. */
+    double nearestServicePointMeters(double latitude, double longitude) {
+        return jdbc.sql("SELECT latitude, longitude FROM service_points WHERE status='ACTIVE'")
+            .query((rs, n) -> org.isolatedareas.helphub.geo.GeoMath.distanceMeters(latitude, longitude,
+                rs.getDouble("latitude"), rs.getDouble("longitude")))
+            .list().stream().mapToDouble(Double::doubleValue).min().orElse(Double.POSITIVE_INFINITY);
     }
 
     public SupplyRequestView get(long id) {
@@ -117,7 +133,8 @@ public class RequestService {
 
     private boolean isAllowed(RequestStatus from, RequestStatus to) {
         return switch (from) {
-            case SUBMITTED -> to == RequestStatus.UNDER_REVIEW || to == RequestStatus.CANCELLED;
+            // Staff may decline straight from the queue; approval goes through ApprovalService.
+            case SUBMITTED -> to == RequestStatus.UNDER_REVIEW || to == RequestStatus.REJECTED || to == RequestStatus.CANCELLED;
             case UNDER_REVIEW -> to == RequestStatus.APPROVED || to == RequestStatus.REJECTED;
             // FULFILLED straight from APPROVED: the supplies were already handed over against a pickup code.
             case APPROVED -> to == RequestStatus.SCHEDULED || to == RequestStatus.FULFILLED || to == RequestStatus.CANCELLED;

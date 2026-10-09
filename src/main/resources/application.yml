@@ -66,7 +66,7 @@ springdoc:
 
 app:
   simulation:
-    # Daily activity of every signed-in resident (simulation/ResidentActivitySimulator); on in production.
+    # Daily activity of every signed-in resident (simulation/ResidentActivitySimulator); off unless enabled.
     enabled: ${RESIDENT_SIMULATION_ENABLED:false}
   inventory:
     # Morning refill of free items below their reorder threshold (inventory/DailyRestock); on in production.
@@ -106,6 +106,10 @@ app:
     # Tencent Location Service WebService key (lbs.qq.com); without it routes are drawn as straight lines.
     tencent-key: ${TENCENT_MAP_KEY:}
     tencent-secret: ${TENCENT_MAP_SK:}
+  address-search:
+    # Used for typed-address search only when no Tencent key is set (console.amap.com, Web 服务 key).
+    amap-key: ${AMAP_KEY:}
+    amap-secret: ${AMAP_SK:}
   rate-limit:
     requests-per-minute: ${RATE_LIMIT_PER_MINUTE:120}
   outbox:

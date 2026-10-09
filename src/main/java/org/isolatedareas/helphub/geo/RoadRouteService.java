@@ -19,9 +19,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
 /**
- * Driving routes along real roads from Tencent Location Service, whose coordinates (GCJ-02)
- * match the WeChat map. Each leg is fetched once and cached in road_legs; without a key, or
- * when the service fails, a leg falls back to the straight line between its ends.
+ * Driving routes along real roads from Tencent Location Service, or from AMap when only an AMap
+ * key is configured; both use GCJ-02, the WeChat map's own coordinates. Each leg is fetched once
+ * and cached in road_legs; without a key, or when the service fails, a leg falls back to the
+ * straight line between its ends.
  */
 @Service
 public class RoadRouteService {
@@ -36,24 +37,35 @@ public class RoadRouteService {
     private final RestClient client;
     private final String key;
     private final String secret;
+    private final String amapKey;
+    private final String amapSecret;
 
+    public RoadRouteService(JdbcClient jdbc, ObjectMapper json, RestClient.Builder builder, String key, String secret) {
+        this(jdbc, json, builder, key, secret, "", "");
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
     public RoadRouteService(JdbcClient jdbc, ObjectMapper json, RestClient.Builder builder,
                             @Value("${app.road-routing.tencent-key:}") String key,
-                            @Value("${app.road-routing.tencent-secret:}") String secret) {
+                            @Value("${app.road-routing.tencent-secret:}") String secret,
+                            @Value("${app.address-search.amap-key:}") String amapKey,
+                            @Value("${app.address-search.amap-secret:}") String amapSecret) {
         SimpleClientHttpRequestFactory requests = new SimpleClientHttpRequestFactory();
         requests.setConnectTimeout(java.time.Duration.ofSeconds(3));
         requests.setReadTimeout(java.time.Duration.ofSeconds(5));
-        this.client = builder.requestFactory(requests).baseUrl("https://apis.map.qq.com").build();
+        this.client = builder.requestFactory(requests).build();
         this.jdbc = jdbc;
         this.json = json;
         this.key = key == null ? "" : key.trim();
         this.secret = secret == null ? "" : secret.trim();
+        this.amapKey = amapKey == null ? "" : amapKey.trim();
+        this.amapSecret = amapSecret == null ? "" : amapSecret.trim();
     }
 
     /** Points along the road from one place to another, both ends included. */
     public List<double[]> path(double fromLat, double fromLon, double toLat, double toLon) {
         List<double[]> straight = List.of(new double[] {fromLat, fromLon}, new double[] {toLat, toLon});
-        if (key.isEmpty() || GeoMath.distanceMeters(fromLat, fromLon, toLat, toLon) < 30) return straight;
+        if ((key.isEmpty() && amapKey.isEmpty()) || GeoMath.distanceMeters(fromLat, fromLon, toLat, toLon) < 30) return straight;
         String legKey = String.format(Locale.ROOT, "%.5f,%.5f>%.5f,%.5f", fromLat, fromLon, toLat, toLon);
         Optional<String> cached = jdbc.sql("SELECT path FROM road_legs WHERE leg_key=:key").param("key", legKey)
             .query(String.class).optional();
@@ -61,7 +73,7 @@ public class RoadRouteService {
             if (cached.isPresent()) return parse(cached.get());
             java.time.Instant blocked = failedUntil.get(legKey);
             if (blocked != null && blocked.isAfter(java.time.Instant.now())) return straight;
-            Fetched fetched = fetch(fromLat, fromLon, toLat, toLon);
+            Fetched fetched = key.isEmpty() ? fetchAmap(fromLat, fromLon, toLat, toLon) : fetch(fromLat, fromLon, toLat, toLon);
             jdbc.sql("""
                     INSERT INTO road_legs (leg_key, distance_meters, duration_seconds, path)
                     VALUES (:key, :distance, :duration, :path)
@@ -83,7 +95,7 @@ public class RoadRouteService {
         // Parameters in ascending name order, as the signature requires.
         String query = "from=" + from + "&key=" + key + "&to=" + to;
         if (!secret.isEmpty()) query += "&sig=" + md5(DRIVING_PATH + "?" + query + secret);
-        JsonNode body = json.readTree(client.get().uri(DRIVING_PATH + "?" + query).retrieve().body(String.class));
+        JsonNode body = json.readTree(client.get().uri("https://apis.map.qq.com" + DRIVING_PATH + "?" + query).retrieve().body(String.class));
         if (body.path("status").asInt(-1) != 0) {
             throw new IllegalStateException("status " + body.path("status").asInt() + " " + body.path("message").asText());
         }
@@ -91,6 +103,39 @@ public class RoadRouteService {
         List<double[]> path = decode(route.path("polyline"));
         if (path.size() < 2) throw new IllegalStateException("empty polyline");
         return new Fetched(path, route.path("distance").asInt(), route.path("duration").asInt() * 60);
+    }
+
+    /** AMap driving route; its points are "longitude,latitude" pairs joined by ";" along each step. */
+    Fetched fetchAmap(double fromLat, double fromLon, double toLat, double toLon) throws Exception {
+        String origin = String.format(Locale.ROOT, "%.6f,%.6f", fromLon, fromLat);
+        String destination = String.format(Locale.ROOT, "%.6f,%.6f", toLon, toLat);
+        // Parameters in ascending name order, as the signature requires.
+        String query = "destination=" + destination + "&key=" + amapKey + "&origin=" + origin;
+        if (!amapSecret.isEmpty()) query += "&sig=" + md5(query + amapSecret);
+        JsonNode body = json.readTree(client.get().uri("https://restapi.amap.com/v3/direction/driving?" + query)
+            .retrieve().body(String.class));
+        if (!"1".equals(body.path("status").asText())) {
+            throw new IllegalStateException("status " + body.path("infocode").asText() + " " + body.path("info").asText());
+        }
+        JsonNode route = body.path("route").path("paths").path(0);
+        List<double[]> path = decodeAmap(route.path("steps"));
+        if (path.size() < 2) throw new IllegalStateException("empty polyline");
+        return new Fetched(path, route.path("distance").asInt(), route.path("duration").asInt());
+    }
+
+    static List<double[]> decodeAmap(JsonNode steps) {
+        List<double[]> points = new ArrayList<>();
+        for (JsonNode step : steps) {
+            for (String pair : step.path("polyline").asText("").split(";")) {
+                String[] parts = pair.split(",");
+                if (parts.length != 2) continue;
+                double[] point = {Double.parseDouble(parts[1]), Double.parseDouble(parts[0])};
+                double[] last = points.isEmpty() ? null : points.get(points.size() - 1);
+                // Each step starts where the last ended; keep the shared point once.
+                if (last == null || last[0] != point[0] || last[1] != point[1]) points.add(point);
+            }
+        }
+        return points;
     }
 
     /** Tencent polylines are [lat, lon, dLat*1e6, dLon*1e6, ...]: every value after the first pair is a delta. */

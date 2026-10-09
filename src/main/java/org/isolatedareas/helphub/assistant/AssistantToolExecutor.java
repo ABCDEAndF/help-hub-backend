@@ -90,7 +90,7 @@ public class AssistantToolExecutor {
             + "，" + (input.fulfillmentMethod() == FulfillmentMethod.PICKUP ? "到服务点自取" : "补给车配送")
             + "，" + (input.preferredStart() == null ? "尽快" : ServiceWindow.describe(input.preferredStart(), input.preferredEnd()))
             + "，紧急程度：" + urgencyName(input.urgency())
-            + (input.inventoryItemId() != null ? "。库存足够会立即自动批准并发放领取码" : "。库存中没有该物资，将转人工处理");
+            + (input.inventoryItemId() != null ? "。提交后由工作人员审核，批准后发放领取码" : "。库存中没有该物资，工作人员审核后会另行联系");
         return ToolResult.confirmation(confirmations.create(userId, "prepare_supply_request", args, summary));
     }
 

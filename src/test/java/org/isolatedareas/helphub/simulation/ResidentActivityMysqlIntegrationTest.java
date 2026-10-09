@@ -17,7 +17,7 @@ import org.isolatedareas.helphub.assistant.AssistantToolExecutor;
 import org.isolatedareas.helphub.assistant.ConfirmationService;
 import org.isolatedareas.helphub.assistant.OpenAiCompatibleClient;
 import org.isolatedareas.helphub.audit.AuditService;
-import org.isolatedareas.helphub.automation.AutoDecisionService;
+import org.isolatedareas.helphub.automation.ApprovalService;
 import org.isolatedareas.helphub.automation.RequestLifecycleListener;
 import org.isolatedareas.helphub.automation.SystemActor;
 import org.isolatedareas.helphub.events.OutboxService;
@@ -68,9 +68,9 @@ class ResidentActivityMysqlIntegrationTest {
         var inventory = new InventoryRepository(jdbc);
         var reservations = new ReservationService(jdbc, inventory, requests, redis, outbox, audit, publisher,
             "integration-test-pickup-code-secret-0123456789");
-        var decisions = new AutoDecisionService(jdbc, requests, requestService, reservations, system);
+        var approvals = new ApprovalService(jdbc, requests, requestService, reservations);
         var tx = new TransactionTemplate(new DataSourceTransactionManager(ds));
-        var submissions = new SubmissionService(new IdempotencyService(jdbc, json), requestService, decisions, tx, jdbc);
+        var submissions = new SubmissionService(new IdempotencyService(jdbc, json), requestService, approvals, tx, jdbc);
         var tools = new AssistantToolExecutor(inventory, requests, reservations, jdbc,
             new ConfirmationService(redis, json), Validation.buildDefaultValidatorFactory().getValidator(), submissions);
         var model = new OpenAiCompatibleClient("https://example.invalid", "", "none", RestClient.builder(), json);
@@ -109,12 +109,10 @@ class ResidentActivityMysqlIntegrationTest {
             .query(Integer.class).single()).isZero();
         assertThat(jdbc.sql("SELECT COUNT(*) FROM assistant_conversations WHERE user_id=:id").param("id", smokeResident)
             .query(Integer.class).single()).isZero();
-        // Stocked items were decided automatically, exactly as for a request from the mini program.
-        assertThat(jdbc.sql("""
-                SELECT COUNT(*) FROM supply_requests
-                WHERE inventory_item_id IS NOT NULL AND status IN ('SUBMITTED','UNDER_REVIEW')
-                """).query(Integer.class).single()).isZero();
-        assertThat(jdbc.sql("SELECT COUNT(*) FROM reservations").query(Integer.class).single()).isPositive();
+        // Simulated orders wait for staff exactly like a request from the mini program.
+        assertThat(jdbc.sql("SELECT COUNT(*) FROM supply_requests WHERE status <> 'SUBMITTED'")
+            .query(Integer.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT COUNT(*) FROM reservations").query(Integer.class).single()).isZero();
         assertThat(jdbc.sql("SELECT COUNT(*) FROM audit_log WHERE action='REQUEST_CREATED'").query(Integer.class).single())
             .isEqualTo(orders);
         assertThat(jdbc.sql("SELECT COUNT(*) FROM outbox_events WHERE event_type='SupplyRequestCreated'")

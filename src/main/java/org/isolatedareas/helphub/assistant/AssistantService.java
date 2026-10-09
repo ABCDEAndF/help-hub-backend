@@ -23,6 +23,7 @@ import org.isolatedareas.helphub.requests.SupplyRequestView;
 
 @Service
 public class AssistantService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AssistantService.class);
     private static final Pattern REQUEST_ID = Pattern.compile(
         "(?:申请|单子|订单|工单|request|#)\\s*#?\\s*(\\d+)|(\\d+)\\s*号?\\s*(?:申请|单子|订单|工单)",
         Pattern.CASE_INSENSITIVE);
@@ -44,7 +45,8 @@ public class AssistantService {
         确认环节由系统统一处理，你的文字确认不具备任何效力。
         工具返回 error 字段时，向用户说明失败原因并请其补充正确信息，不要重复调用同一工具。
         提交需求前先调用 check_inventory：库存中有该物资时，把对应的 id 作为 inventoryItemId 传入，
-        系统会立即自动审批——库存足够就批准并锁定库存、发放领取码，不足则拒绝；库存中没有的物资不传 inventoryItemId，会转人工处理。
+        所有需求都由工作人员人工审核，系统不会自动批准；批准后才锁定离居民最近且有货的服务点的库存并发放领取码。
+        库存中没有的物资不传 inventoryItemId，工作人员会另行联系。
         提交需求还需要领取方式（PICKUP 到服务点自取 / DELIVERY 补给车配送）和居民位置经纬度；缺少时先询问。
         配送由系统自动调度最近的补给车：先到服务点取货再送达，居民可在地图上看到车辆位置和预计到达时间。
         领取码保留 48 小时；到点自取需在服务点营业时间内前往。
@@ -100,7 +102,15 @@ public class AssistantService {
         }
         List<AssistantModels.ToolExecution> executions = new ArrayList<>();
         for (int round = 0; round < maxToolRounds; round++) {
-            OpenAiCompatibleClient.ModelMessage response = model.complete(messages);
+            OpenAiCompatibleClient.ModelMessage response;
+            try {
+                response = model.complete(messages);
+            } catch (RuntimeException unavailable) {
+                // Quota used up, key revoked, timeout: answer from live data without the model
+                // instead of failing the whole question.
+                log.warn("LLM unavailable, answering without it: {}", unavailable.getMessage());
+                return fallback(userId, conversationId, input.message());
+            }
             if (response.toolCalls() == null || !response.toolCalls().isArray() || response.toolCalls().isEmpty()) {
                 String content = response.content().isBlank() ? "请补充您需要的物资或服务信息。" : response.content();
                 saveMessage(conversationId, "ASSISTANT", content, null);
@@ -150,7 +160,7 @@ public class AssistantService {
     private static final String FLOW = """
         使用流程：
         ① 在“求助”页从现有物资中选择所需物资和数量，设置位置，并选择“到点自取”或“补给车配送”；
-        ② 系统立即自动审批：库存足够就批准，锁定离你最近且有货的服务点的物资，并发放 6 位领取码（保留 48 小时）；库存不足会说明原因；
+        ② 工作人员人工审核：批准后系统锁定离你最近且有货的服务点的物资，并发放 6 位领取码（保留 48 小时）；未通过会在“进度”页说明；
         ③ 到点自取：在营业时间内到该服务点出示领取码；补给车配送：系统自动派最近的补给车先取货再送达，可在“进度”页查看车辆位置和预计到达时间；
         ④ 库存中没有的物资可选“其他需求”，会转人工处理。完成后可在“进度”页提交服务反馈。所有物资均为公益免费。""";
     private static final String HELP = "我可以直接查询：①“现在有哪些物资”“有大米吗” ②“服务点在哪、几点开门” "
@@ -247,7 +257,7 @@ public class AssistantService {
         available.stream().limit(20).forEach(item -> answer.append("• ").append(item.name())
             .append("：").append(item.freeQuantity()).append(item.unit())
             .append("（").append(item.servicePointName()).append("）\n"));
-        answer.append("请先提交需求；审核通过后，到“物资预约”选择对应物资和数量。");
+        answer.append("请在“求助”页提交需求；工作人员审核批准后，会锁定库存并发放领取码。");
         return answer.toString();
     }
 

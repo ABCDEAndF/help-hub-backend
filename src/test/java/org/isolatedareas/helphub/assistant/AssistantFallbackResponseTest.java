@@ -23,7 +23,7 @@ class AssistantFallbackResponseTest {
 
         String answer = AssistantService.describeInventory(List.of(item));
 
-        assertThat(answer).contains("免费领取", "应急生活包", "18包", "夏阳公益服务点", "物资预约")
+        assertThat(answer).contains("免费领取", "应急生活包", "18包", "夏阳公益服务点", "工作人员审核")
             .doesNotContain("未配置");
     }
 

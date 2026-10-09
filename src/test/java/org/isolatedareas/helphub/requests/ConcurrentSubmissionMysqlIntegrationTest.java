@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
 import org.flywaydb.core.Flyway;
 import org.isolatedareas.helphub.api.IdempotencyService;
 import org.isolatedareas.helphub.audit.AuditService;
-import org.isolatedareas.helphub.automation.AutoDecisionService;
+import org.isolatedareas.helphub.automation.ApprovalService;
 import org.isolatedareas.helphub.automation.RequestLifecycleListener;
 import org.isolatedareas.helphub.automation.SystemActor;
 import org.isolatedareas.helphub.domain.FulfillmentMethod;
@@ -40,7 +40,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Many first-time residents submitting at the same moment, through the same idempotent,
- * transactional path as the API, must all get their request (set REPRO_MYSQL_URL etc.).
+ * transactional path as the API, must all get their request, and staff approving them all at
+ * once must reserve stock for every one without deadlocking (set REPRO_MYSQL_URL etc.).
  */
 @EnabledIfEnvironmentVariable(named = "REPRO_MYSQL_URL", matches = ".+")
 class ConcurrentSubmissionMysqlIntegrationTest {
@@ -67,10 +68,10 @@ class ConcurrentSubmissionMysqlIntegrationTest {
         var reservations = new ReservationService(jdbc, new InventoryRepository(jdbc), requests,
             mock(StringRedisTemplate.class, RETURNS_DEEP_STUBS), outbox, audit, publisher,
             "integration-test-pickup-code-secret-0123456789");
-        var decisions = new AutoDecisionService(jdbc, requests, requestService, reservations, system);
+        var approvals = new ApprovalService(jdbc, requests, requestService, reservations);
         var idempotency = new IdempotencyService(jdbc, json);
-        var submissions = new SubmissionService(idempotency, requestService, decisions,
-            new TransactionTemplate(new DataSourceTransactionManager(ds)), jdbc);
+        var tx = new TransactionTemplate(new DataSourceTransactionManager(ds));
+        var submissions = new SubmissionService(idempotency, requestService, approvals, tx, jdbc);
 
         List<Long> residents = new ArrayList<>();
         for (int index = 0; index < RESIDENTS; index++) {
@@ -106,12 +107,35 @@ class ConcurrentSubmissionMysqlIntegrationTest {
         pool.shutdown();
         assertThat(pool.awaitTermination(60, TimeUnit.SECONDS)).isTrue();
         assertThat(failures).as("failures: %s", failures).isEmpty();
+        List<Long> submitted = new ArrayList<>();
         for (Future<SupplyRequestView> future : futures) {
             SupplyRequestView view = future.get();
             assertThat(view.residentNumber()).isEqualTo(1);
-            assertThat(view.status()).isIn(RequestStatus.APPROVED, RequestStatus.SCHEDULED);
+            // Nothing is approved or reserved until staff say so.
+            assertThat(view.status()).isEqualTo(RequestStatus.SUBMITTED);
+            submitted.add(view.id());
         }
         assertThat(jdbc.sql("SELECT COUNT(*) FROM supply_requests").query(Integer.class).single()).isEqualTo(RESIDENTS);
+        assertThat(jdbc.sql("SELECT COUNT(*) FROM reservations").query(Integer.class).single()).isZero();
+
+        // Staff approving every request at the same moment: each one gets its stock.
+        ExecutorService staff = Executors.newFixedThreadPool(RESIDENTS);
+        CountDownLatch go = new CountDownLatch(1);
+        List<Future<SupplyRequestView>> approved = new ArrayList<>();
+        for (long id : submitted) {
+            approved.add(staff.submit(() -> {
+                go.await();
+                return tx.execute(s -> approvals.approve(id, system.id()));
+            }));
+        }
+        go.countDown();
+        staff.shutdown();
+        assertThat(staff.awaitTermination(60, TimeUnit.SECONDS)).isTrue();
+        for (Future<SupplyRequestView> future : approved) {
+            assertThat(future.get().status()).isIn(RequestStatus.APPROVED, RequestStatus.SCHEDULED);
+        }
+        assertThat(jdbc.sql("SELECT COUNT(*) FROM reservations WHERE status='HELD'").query(Integer.class).single())
+            .isEqualTo(RESIDENTS);
 
         // The same resident submitting twice at once still gets numbers 1 and 2, never a clash.
         long twice = residents.get(0);

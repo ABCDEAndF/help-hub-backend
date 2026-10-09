@@ -13,7 +13,9 @@ server:
 
 app:
   simulation:
-    enabled: ${RESIDENT_SIMULATION_ENABLED:true}
+    # Off: every request now waits for a staff member, so simulated orders would only fill the
+    # review queue. Set RESIDENT_SIMULATION_ENABLED=true to act out residents again.
+    enabled: ${RESIDENT_SIMULATION_ENABLED:false}
   inventory:
     daily-restock: ${DAILY_RESTOCK_ENABLED:true}
   pickup-code-secret: ${PICKUP_CODE_SECRET}
