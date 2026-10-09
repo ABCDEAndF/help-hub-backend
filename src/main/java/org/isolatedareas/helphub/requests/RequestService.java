@@ -14,9 +14,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class RequestService {
-    /** Carts deliver only this far (straight line) from the nearest active service point. */
-    public static final double DELIVERY_RADIUS_METERS = 10_000;
-    static final String OUT_OF_RANGE = "配送地址距离最近的服务点超过 10 公里，不在配送范围内。可改为到服务点自取，或更换地址。";
+    /** The programme serves only this far (straight line) from the nearest active service point. */
+    public static final double SERVICE_RADIUS_METERS = 10_000;
+    static final String OUT_OF_RANGE = "你的位置距离最近的服务点超过 10 公里，不在服务范围内，无法提交。请确认地址是否填写正确。";
 
     private final SupplyRequestRepository requests;
     private final OutboxService outbox;
@@ -33,8 +33,8 @@ public class RequestService {
     @Transactional
     public SupplyRequestView create(long residentId, CreateSupplyRequest input) {
         ServiceWindow.validate(input.preferredStart(), input.preferredEnd(), java.time.Instant.now());
-        if (input.fulfillmentMethod() == FulfillmentMethod.DELIVERY
-            && nearestServicePointMeters(input.latitude().doubleValue(), input.longitude().doubleValue()) > DELIVERY_RADIUS_METERS) {
+        // Outside the area nothing is served, neither delivered nor picked up: refused outright.
+        if (nearestServicePointMeters(input.latitude().doubleValue(), input.longitude().doubleValue()) > SERVICE_RADIUS_METERS) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, OUT_OF_RANGE);
         }
         if (input.inventoryItemId() != null) {

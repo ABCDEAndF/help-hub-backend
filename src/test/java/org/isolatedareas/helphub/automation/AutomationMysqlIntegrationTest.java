@@ -115,15 +115,13 @@ class AutomationMysqlIntegrationTest {
         assertThat(otherApproved.status()).isEqualTo(RequestStatus.APPROVED);
         assertThat(otherApproved.decisionNote()).isEqualTo(ApprovalService.MANUAL_APPROVED_NOTE);
         assertThat(other.itemDescription()).isEqualTo("集成测试🍚");
-        // A delivery more than 10 km from every service point is refused outright; a pickup is not.
-        var farAway = new CreateSupplyRequest("OTHER", "远处配送", 1, Urgency.NORMAL, new BigDecimal("31.3000"),
-            new BigDecimal("121.4000"), null, null, null, null, FulfillmentMethod.DELIVERY, industrialRice);
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx.execute(s -> requestService.create(resident, farAway)))
-            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class).hasMessageContaining("10 公里");
-        SupplyRequestView farPickup = tx.execute(s -> requestService.create(resident, new CreateSupplyRequest("OTHER", "远处自取", 1,
-            Urgency.NORMAL, new BigDecimal("31.3000"), new BigDecimal("121.4000"), null, null, null, null, FulfillmentMethod.PICKUP, null)));
-        tx.execute(s -> requestService.transition(farPickup.id(), system.id(),
-            new RequestService.TransitionRequest(RequestStatus.CANCELLED, null, null)));
+        // More than 10 km from every service point nothing is served: delivery and pickup are both refused.
+        for (FulfillmentMethod method : FulfillmentMethod.values()) {
+            var farAway = new CreateSupplyRequest("OTHER", "远处需求", 1, Urgency.NORMAL, new BigDecimal("31.3000"),
+                new BigDecimal("121.4000"), null, null, null, null, method, industrialRice);
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx.execute(s -> requestService.create(resident, farAway)))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class).hasMessageContaining("10 公里");
+        }
         jdbc.sql("INSERT INTO assistant_conversations (id, user_id) VALUES ('00000000-0000-0000-0000-000000000001', :u)")
             .param("u", resident).update();
         jdbc.sql("""
@@ -181,10 +179,10 @@ class AutomationMysqlIntegrationTest {
         assertThat(loadLeg.details()).singleElement().asString().startsWith("装车：").contains("× 1", "测试居民😀");
         var dropLeg = route.legs().get(1);
         assertThat(dropLeg.fromName()).isEqualTo("邻需通·青浦工业园区公益服务点");
-        assertThat(dropLeg.toName()).isEqualTo("送达：测试居民😀（第 5 个申请）");
+        assertThat(dropLeg.toName()).isEqualTo("送达：测试居民😀（第 4 个申请）");
         assertThat(dropLeg.toLatitude()).isEqualTo(NEAR_INDUSTRIAL_LAT.doubleValue());
         assertThat(dropLeg.details()).anyMatch(line -> line.contains("× 1")).anyMatch(line -> line.contains("领取码"));
-        assertThat(route.legs().get(2).fromName()).isEqualTo("测试居民😀（第 5 个申请）");
+        assertThat(route.legs().get(2).fromName()).isEqualTo("测试居民😀（第 4 个申请）");
         assertThat(route.legs().get(2).toName()).startsWith("返回：");
         assertThat(couriers.routeFor(courierIds[0], Instant.now()).statusText()).startsWith("暂无配送任务");
         // Without a map key every leg is the straight line between its ends.
