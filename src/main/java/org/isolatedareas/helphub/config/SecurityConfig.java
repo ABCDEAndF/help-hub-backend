@@ -71,6 +71,8 @@ public class SecurityConfig {
         configuration.setExposedHeaders(java.util.List.of(
             "X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining"));
         configuration.setAllowCredentials(true);
+        // Browsers may reuse a preflight answer for an hour instead of asking before every call.
+        configuration.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;

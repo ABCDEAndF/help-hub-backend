@@ -20,7 +20,8 @@ app:
     daily-restock: ${DAILY_RESTOCK_ENABLED:true}
   pickup-code-secret: ${PICKUP_CODE_SECRET}
   cors:
-    allowed-origin-patterns: ${CORS_ALLOWED_ORIGIN_PATTERNS:https://servicewechat.com}
+    # The web version of the resident app (resident-web) calls the API from its own site.
+    allowed-origin-patterns: ${CORS_ALLOWED_ORIGIN_PATTERNS:https://servicewechat.com,https://qingpu-help-hub.vercel.app}
   auth:
     jwt-secret: ${JWT_SECRET}
     dev-login-enabled: false
