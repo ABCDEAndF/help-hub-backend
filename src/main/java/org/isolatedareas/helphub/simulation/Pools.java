@@ -3,28 +3,10 @@ package org.isolatedareas.helphub.simulation;
 import java.util.List;
 import java.util.Map;
 
-/** What residents write: assistant questions, delivery notes, needs outside the stock, feedback. */
+/** What residents write: delivery notes, needs outside the stock, feedback. */
 final class Pools {
     private Pools() {
     }
-
-    /** "{n}" is replaced by the resident's latest request number. */
-    static final Map<DailyActivityPlanner.ChatTopic, List<String>> QUESTIONS = Map.of(
-        DailyActivityPlanner.ChatTopic.INVENTORY, List.of(
-            "现在有哪些物资？", "有大米吗？", "饮用水还有吗", "有没有食用油", "卫生用品有吗",
-            "挂面还有库存吗", "急救包还有吗", "最近有什么物资可以领"),
-        DailyActivityPlanner.ChatTopic.SERVICE_POINTS, List.of(
-            "服务点几点开门？", "青浦有哪些服务点", "夏阳的服务点在哪", "服务点地址在哪里",
-            "工业园区那个服务点几点关门", "最近的领取点在哪", "服务点营业时间是几点到几点", "服务点在哪"),
-        DailyActivityPlanner.ChatTopic.PROGRESS, List.of(
-            "我的申请进度", "我的申请到哪一步了", "{n}号申请到哪了", "帮我查一下{n}号单子",
-            "我的订单状态", "申请 #{n} 现在什么状态", "我提交的申请怎么样了", "{n}号订单进度"),
-        DailyActivityPlanner.ChatTopic.RESERVATIONS, List.of(
-            "我的领取码", "我的预约记录", "领取码在哪里看", "我的预约状态",
-            "我预约了什么", "我的领取码是多少", "查一下我的预约", "我的预约记录有哪些"),
-        DailyActivityPlanner.ChatTopic.HOW_TO, List.of(
-            "怎么申请和领取？", "如何申请配送", "怎么预约自取", "怎样提交申请",
-            "如何领取物资", "配送怎么申请", "领物资的流程是什么", "怎么用这个小程序申请"));
 
     static final List<String> NOTES = List.of(
         "家中有行动不便的老人，请敲门后稍等", "到了请打电话，我下楼拿", "白天家里没人，傍晚后方便",

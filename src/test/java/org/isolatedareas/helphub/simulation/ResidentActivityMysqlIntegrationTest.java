@@ -5,17 +5,12 @@ import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.validation.Validation;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import org.flywaydb.core.Flyway;
 import org.isolatedareas.helphub.api.IdempotencyService;
-import org.isolatedareas.helphub.assistant.AssistantService;
-import org.isolatedareas.helphub.assistant.AssistantToolExecutor;
-import org.isolatedareas.helphub.assistant.ConfirmationService;
-import org.isolatedareas.helphub.assistant.OpenAiCompatibleClient;
 import org.isolatedareas.helphub.audit.AuditService;
 import org.isolatedareas.helphub.automation.ApprovalService;
 import org.isolatedareas.helphub.automation.RequestLifecycleListener;
@@ -38,7 +33,6 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.web.client.RestClient;
 
 /**
  * Plays a day and a half of resident activity against a real MySQL database migrated with the
@@ -71,12 +65,8 @@ class ResidentActivityMysqlIntegrationTest {
         var approvals = new ApprovalService(jdbc, requests, requestService, reservations);
         var tx = new TransactionTemplate(new DataSourceTransactionManager(ds));
         var submissions = new SubmissionService(new IdempotencyService(jdbc, json), requestService, approvals, tx, jdbc);
-        var tools = new AssistantToolExecutor(inventory, requests, reservations, jdbc,
-            new ConfirmationService(redis, json), Validation.buildDefaultValidatorFactory().getValidator(), submissions);
-        var model = new OpenAiCompatibleClient("https://example.invalid", "", "none", RestClient.builder(), json);
-        var assistant = new AssistantService(model, tools, jdbc, json, 4);
         var area = new ServiceArea(jdbc);
-        var simulator = new ResidentActivitySimulator(jdbc, submissions, assistant, reservations, inventory, area,
+        var simulator = new ResidentActivitySimulator(jdbc, submissions, reservations, inventory, area,
             system, tx, true);
 
         Instant now = Instant.now();
@@ -126,10 +116,9 @@ class ResidentActivityMysqlIntegrationTest {
                 GeoMath.distanceMeters(request[0], request[1], point[0], point[1])).min().orElseThrow())
                 .isLessThan(ServiceArea.RADIUS_METERS + 800));
 
-        assertThat(jdbc.sql("SELECT COUNT(*) FROM assistant_messages WHERE role='USER'").query(Integer.class).single())
-            .isPositive();
-        assertThat(jdbc.sql("SELECT COUNT(*) FROM assistant_messages WHERE role='ASSISTANT'").query(Integer.class).single())
-            .isEqualTo(jdbc.sql("SELECT COUNT(*) FROM assistant_messages WHERE role='USER'").query(Integer.class).single());
+        // Simulated residents never use the assistant.
+        assertThat(jdbc.sql("SELECT COUNT(*) FROM assistant_conversations").query(Integer.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT COUNT(*) FROM assistant_messages").query(Integer.class).single()).isZero();
 
         // Playing the same span again does not repeat anything already done by then.
         int before = jdbc.sql("SELECT COUNT(*) FROM supply_requests").query(Integer.class).single();

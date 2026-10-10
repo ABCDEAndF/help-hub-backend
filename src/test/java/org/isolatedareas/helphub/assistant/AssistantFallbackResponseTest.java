@@ -56,6 +56,53 @@ class AssistantFallbackResponseTest {
     }
 
     @Test
+    void findsItemsByTheNamesResidentsSee() {
+        var mask = new InventoryItemView(1, 1, "邻需通·夏阳公益服务点", "青松路", "QP-XY-MASK-50",
+            "医用外科口罩 50 只", "MEDICAL", "盒", 0, 14, 0, 14, 5, 0, Instant.EPOCH);
+        var milk = new InventoryItemView(2, 1, "邻需通·夏阳公益服务点", "青松路", "QP-XY-MILK-12",
+            "公益纯牛奶 250 毫升×12 盒", "FOOD", "箱", 0, 26, 0, 26, 5, 0, Instant.EPOCH);
+        var adult = new InventoryItemView(3, 2, "邻需通·青浦工业园区公益服务点", "清河湾路", "QP-GY-ADULT-DIAPER-L",
+            "成人纸尿裤 L 码", "HYGIENE", "包", 0, 14, 0, 14, 5, 0, Instant.EPOCH);
+        var baby = new InventoryItemView(4, 1, "邻需通·夏阳公益服务点", "青松路", "QP-XY-BABY-DIAPER-M",
+            "婴儿纸尿裤 M 码", "HYGIENE", "包", 0, 13, 0, 13, 5, 0, Instant.EPOCH);
+        var tissue = new InventoryItemView(5, 1, "邻需通·夏阳公益服务点", "青松路", "QP-XY-TISSUE-10",
+            "抽纸 10 包公益装", "HYGIENE", "提", 0, 29, 0, 29, 5, 0, Instant.EPOCH);
+        var blanket = new InventoryItemView(6, 2, "邻需通·青浦工业园区公益服务点", "清河湾路", "QP-GY-BLANKET",
+            "保暖毯", "OTHER", "条", 0, 9, 9, 0, 5, 0, Instant.EPOCH);
+        var kit = new InventoryItemView(7, 2, "邻需通·青浦工业园区公益服务点", "清河湾路", "QP-GY-HYGIENE-01",
+            "公益基础卫生用品包", "HYGIENE", "包", 0, 32, 0, 32, 5, 0, Instant.EPOCH);
+        var stock = List.of(mask, milk, adult, baby, tissue, blanket, kit);
+
+        assertThat(AssistantService.coreName("公益纯牛奶 250 毫升×12 盒")).isEqualTo("纯牛奶");
+        assertThat(AssistantService.matchedItems(stock, "有口罩吗")).containsExactly(mask);
+        assertThat(AssistantService.matchedItems(stock, "还有牛奶吗？")).containsExactly(milk);
+        // The longest shared run wins: diapers, not tissues.
+        assertThat(AssistantService.matchedItems(stock, "有纸尿裤吗")).containsExactly(adult, baby);
+        assertThat(AssistantService.matchedItems(stock, "我的申请进度")).isEmpty();
+        assertThat(AssistantService.matchedItems(stock, "有成人纸尿裤、纯牛奶吗")).containsExactly(milk, adult);
+        assertThat(AssistantService.matchedItems(stock, "有什么用品")).isEmpty();
+        assertThat(AssistantService.describeNamedInventory(AssistantService.matchedItems(stock, "有保暖毯吗")))
+            .contains("保暖毯 目前已全部被预约");
+        assertThat(AssistantService.describeNamedInventory(List.of(adult, baby)))
+            .contains("成人纸尿裤 L 码：14包（邻需通·青浦工业园区公益服务点）", "婴儿纸尿裤 M 码：13包");
+    }
+
+    @Test
+    void listsEveryProductOnceWithEachPointThatStocksIt() {
+        var xiayang = new InventoryItemView(1, 1, "邻需通·夏阳公益服务点", "青松路", "QP-XY-RICE-5KG",
+            "公益大米 5 千克", "FOOD", "袋", 0, 80, 0, 80, 15, 0, Instant.EPOCH);
+        var industrial = new InventoryItemView(2, 2, "邻需通·青浦工业园区公益服务点", "清河湾路", "QP-GY-RICE-5KG",
+            "公益大米 5 千克", "FOOD", "袋", 0, 100, 0, 100, 15, 0, Instant.EPOCH);
+        var many = new java.util.ArrayList<InventoryItemView>(List.of(xiayang, industrial));
+        for (int i = 0; i < 30; i++) {
+            many.add(new InventoryItemView(10 + i, 1, "邻需通·夏阳公益服务点", "青松路", "QP-" + i,
+                "物资" + i, "OTHER", "件", 0, 5, 0, 5, 1, 0, Instant.EPOCH));
+        }
+        String answer = AssistantService.describeInventory(many);
+        assertThat(answer).contains("• 公益大米 5 千克：80袋（邻需通·夏阳公益服务点）、100袋（邻需通·青浦工业园区公益服务点）", "物资29：5件");
+    }
+
+    @Test
     void mapsColloquialCategories() {
         assertThat(AssistantService.matchedCategory("有什么吃的")).isEqualTo("FOOD");
         assertThat(AssistantService.matchedItemTerm("应急物资有吗")).isEqualTo("应急");

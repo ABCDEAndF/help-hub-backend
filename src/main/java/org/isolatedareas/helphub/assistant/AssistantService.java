@@ -83,7 +83,7 @@ public class AssistantService {
         }
 
         saveMessage(conversationId, "USER", input.message(), null);
-        if (!model.configured()) return fallback(userId, conversationId, input.message());
+        if (!model.configured()) return fallback(userId, conversationId, input.lookupText());
 
         ArrayNode messages = conversationMessages(conversationId);
         appendRequestIdHint(messages, input.message());
@@ -100,6 +100,11 @@ public class AssistantService {
             messages.add(json.createObjectNode().put("role", "system").put("content",
                 "居民尚未在小程序中设置位置。需要位置时，请提示居民先在首页或地图页点“设置我的位置”，不要索要经纬度数字。"));
         }
+        if (input.english()) {
+            messages.add(json.createObjectNode().put("role", "system").put("content",
+                "居民正在使用英文界面：请全程用简明英文回答。工具结果中的物资名、服务点名和地址是中文，"
+                    + "请译成自然的英文表述后再告诉居民，领取码、编号和数字保持原样。"));
+        }
         List<AssistantModels.ToolExecution> executions = new ArrayList<>();
         for (int round = 0; round < maxToolRounds; round++) {
             OpenAiCompatibleClient.ModelMessage response;
@@ -109,7 +114,7 @@ public class AssistantService {
                 // Quota used up, key revoked, timeout: answer from live data without the model
                 // instead of failing the whole question.
                 log.warn("LLM unavailable, answering without it: {}", unavailable.getMessage());
-                return fallback(userId, conversationId, input.message());
+                return fallback(userId, conversationId, input.lookupText());
             }
             if (response.toolCalls() == null || !response.toolCalls().isArray() || response.toolCalls().isEmpty()) {
                 String content = response.content().isBlank() ? "请补充您需要的物资或服务信息。" : response.content();
@@ -198,19 +203,28 @@ public class AssistantService {
             } else {
                 content = describeRequests(run(userId, "list_my_requests", json.createObjectNode(), executions));
             }
-        } else if (containsAny(message, "库存", "物资", "有什么", "可领", "领什么", "inventory")
-            || matchedItemTerm(message) != null || matchedCategory(message) != null) {
-            String term = matchedItemTerm(message);
-            String category = term == null ? matchedCategory(message) : null;
-            ObjectNode args = json.createObjectNode();
-            if (category != null) args.put("category", category);
-            Object result = run(userId, "check_inventory", args, executions);
-            content = term == null ? describeInventory(result) : describeInventory(result, term);
-        } else if (containsAny(message, "服务点", "青浦", "领取点", "在哪", "地址", "几点", "营业", "开门", "关门",
-            "时间", "附近", "位置")) {
-            content = describeServicePoints(run(userId, "list_service_points", json.createObjectNode(), executions));
         } else {
-            content = HELP;
+            // Residents ask for things by the names they see in the app ("口罩", "保暖毯", "纸尿裤"),
+            // most of which no fixed keyword list covers, so look the question up in the stock itself.
+            Object stock = tools.execute(userId, "check_inventory", json.createObjectNode()).result();
+            List<InventoryItemView> named = matchedItems(stock, message);
+            if (!named.isEmpty()) {
+                executions.add(new AssistantModels.ToolExecution("check_inventory", stock));
+                content = describeNamedInventory(named);
+            } else if (containsAny(message, "库存", "物资", "有什么", "可领", "领什么", "inventory")
+                || matchedItemTerm(message) != null || matchedCategory(message) != null) {
+                String term = matchedItemTerm(message);
+                String category = term == null ? matchedCategory(message) : null;
+                ObjectNode args = json.createObjectNode();
+                if (category != null) args.put("category", category);
+                Object result = run(userId, "check_inventory", args, executions);
+                content = term == null ? describeInventory(result) : describeInventory(result, term);
+            } else if (containsAny(message, "服务点", "青浦", "领取点", "在哪", "地址", "几点", "营业", "开门", "关门",
+                "时间", "附近", "位置")) {
+                content = describeServicePoints(run(userId, "list_service_points", json.createObjectNode(), executions));
+            } else {
+                content = HELP;
+            }
         }
         saveMessage(conversationId, "ASSISTANT", content, null);
         return new AssistantModels.ChatResponse(conversationId, content, executions, null, false);
@@ -229,6 +243,57 @@ public class AssistantService {
     static String matchedCategory(String message) {
         return CATEGORY_TERMS.entrySet().stream().filter(entry -> message.contains(entry.getKey()))
             .map(Map.Entry::getValue).findFirst().orElse(null);
+    }
+
+    // Parts of item names that say nothing about what the item is.
+    private static final List<String> GENERIC_NAME_PARTS = List.of("基础", "套装", "组合", "综合", "用品");
+
+    /** The item itself in a stock name: "公益纯牛奶 250 毫升×12 盒" -> "纯牛奶", "医用外科口罩 50 只" -> "医用外科口罩". */
+    static String coreName(String name) {
+        return name == null ? "" : name.replace("公益", "").replaceAll("[\\s\\d].*$", "").trim();
+    }
+
+    /**
+     * Stock rows the question asks about: every item it names in full, otherwise those whose name shares
+     * the longest run of at least two characters with it, e.g. "有口罩吗" -> 医用外科口罩, "纸尿裤" -> both
+     * diaper sizes. Empty when no name matches.
+     */
+    static List<InventoryItemView> matchedItems(Object value, String message) {
+        if (!(value instanceof List<?> values) || message == null) return List.of();
+        // Every item named in full ("有挂面、方便面吗") is answered, not only the longest name.
+        List<InventoryItemView> whole = values.stream().filter(InventoryItemView.class::isInstance)
+            .map(InventoryItemView.class::cast)
+            .filter(item -> coreName(item.name()).length() > 1 && message.contains(coreName(item.name()))).toList();
+        if (!whole.isEmpty()) return whole;
+        int best = 2;
+        List<InventoryItemView> matches = new ArrayList<>();
+        for (Object row : values) {
+            if (!(row instanceof InventoryItemView item)) continue;
+            int length = longestSharedRun(coreName(item.name()), message);
+            if (length > best) {
+                best = length;
+                matches.clear();
+            }
+            if (length == best) matches.add(item);
+        }
+        return matches;
+    }
+
+    private static int longestSharedRun(String name, String message) {
+        for (int length = name.length(); length > 1; length--) {
+            for (int start = 0; start + length <= name.length(); start++) {
+                String part = name.substring(start, start + length);
+                if (!GENERIC_NAME_PARTS.contains(part) && message.contains(part)) return length;
+            }
+        }
+        return 0;
+    }
+
+    /** Answers a question about particular items, saying so plainly when they have all been reserved. */
+    static String describeNamedInventory(List<InventoryItemView> items) {
+        if (items.stream().anyMatch(item -> item.freeQuantity() > 0)) return describeInventory(items);
+        String names = String.join("、", items.stream().map(InventoryItemView::name).distinct().toList());
+        return names + " 目前已全部被预约，暂时无法领取；您可以在“求助”页提交需求，我们会记录并跟进。";
     }
 
     /** Answers a question about one kind of item, e.g. "有大米吗", listing every point that stocks it. */
@@ -253,10 +318,19 @@ public class AssistantService {
         if (available.isEmpty()) {
             return "当前库存已全部预约完；您可以在首页提交具体需求，我们会记录并跟进。";
         }
+        // One line per product, however many service points stock it, so the whole list fits.
+        Map<String, List<InventoryItemView>> byName = new java.util.LinkedHashMap<>();
+        available.forEach(item -> byName.computeIfAbsent(item.name(), name -> new ArrayList<>()).add(item));
         StringBuilder answer = new StringBuilder("当前可免费领取：\n");
-        available.stream().limit(20).forEach(item -> answer.append("• ").append(item.name())
-            .append("：").append(item.freeQuantity()).append(item.unit())
-            .append("（").append(item.servicePointName()).append("）\n"));
+        byName.forEach((name, rows) -> {
+            answer.append("• ").append(name).append("：");
+            for (int i = 0; i < rows.size(); i++) {
+                InventoryItemView item = rows.get(i);
+                if (i > 0) answer.append("、");
+                answer.append(item.freeQuantity()).append(item.unit()).append("（").append(item.servicePointName()).append("）");
+            }
+            answer.append("\n");
+        });
         answer.append("请在“求助”页提交需求；工作人员审核批准后，会锁定库存并发放领取码。");
         return answer.toString();
     }

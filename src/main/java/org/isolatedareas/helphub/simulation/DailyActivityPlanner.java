@@ -11,8 +11,9 @@ import java.util.List;
 import java.util.SplittableRandom;
 
 /**
- * What one resident does on one day: when they order and what kind of order, when they talk to
- * the assistant, and when they check whether a pickup is due or a finished request deserves
+ * What one resident does on one day: when they order and what kind of order, when they would have
+ * talked to the assistant (planned but no longer carried out, see ResidentActivitySimulator), and
+ * when they check whether a pickup is due or a finished request deserves
  * feedback. The plan depends only on the user, their first sign-in and the date, so it is the
  * same on every instance; anything that depends on live data (stock, their requests) is decided
  * when the activity is carried out.

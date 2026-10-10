@@ -16,8 +16,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.SplittableRandom;
 import java.util.UUID;
-import org.isolatedareas.helphub.assistant.AssistantModels;
-import org.isolatedareas.helphub.assistant.AssistantService;
 import org.isolatedareas.helphub.automation.SystemActor;
 import org.isolatedareas.helphub.domain.FulfillmentMethod;
 import org.isolatedareas.helphub.domain.Urgency;
@@ -38,7 +36,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Acts out every signed-in resident's day, for 90 days from their first sign-in: they submit
- * requests, ask the assistant, collect pickups and leave feedback through the same services the
+ * requests, collect pickups and leave feedback through the same services the
  * mini program calls, so approval, stock, dispatch, couriers' routes and notifications all
  * follow exactly as for any request. Only today's activities are played, as their time comes.
  */
@@ -53,7 +51,6 @@ public class ResidentActivitySimulator {
 
     private final JdbcClient jdbc;
     private final SubmissionService submissions;
-    private final AssistantService assistant;
     private final ReservationService reservations;
     private final InventoryRepository inventory;
     private final ServiceArea area;
@@ -64,13 +61,12 @@ public class ResidentActivitySimulator {
     private final Map<String, List<DailyActivityPlanner.Activity>> plans = new HashMap<>();
     private LocalDate plannedDay;
 
-    public ResidentActivitySimulator(JdbcClient jdbc, SubmissionService submissions, AssistantService assistant,
+    public ResidentActivitySimulator(JdbcClient jdbc, SubmissionService submissions,
                                      ReservationService reservations, InventoryRepository inventory, ServiceArea area,
                                      SystemActor system, TransactionTemplate transactions,
                                      @Value("${app.simulation.enabled:false}") boolean enabled) {
         this.jdbc = jdbc;
         this.submissions = submissions;
-        this.assistant = assistant;
         this.reservations = reservations;
         this.inventory = inventory;
         this.area = area;
@@ -180,7 +176,10 @@ public class ResidentActivitySimulator {
     private void perform(DailyActivityPlanner.Activity activity, Instant now) {
         switch (activity.type()) {
             case ORDER -> order(activity, now);
-            case CHAT -> chat(activity.userId(), activity.chat());
+            // Simulated residents never talk to the assistant: every answer it gives may cost a model
+            // call. The conversations stay in the plan only so that every other activity keeps the
+            // same time and content it always had.
+            case CHAT -> { }
             case PICKUP_CHECK -> collectDuePickups(activity.userId(), now);
             case FEEDBACK_CHECK -> leaveFeedback(activity.userId(), now);
         }
@@ -212,11 +211,8 @@ public class ResidentActivitySimulator {
                 (a, b) -> b.maxFree() > a.maxFree() ? b : a);
         }
         List<Product> available = products.values().stream().filter(product -> product.maxFree() > 0).toList();
-        if (available.isEmpty()) {
-            // Nothing to pick in the form, so the resident asks what there is instead.
-            chat(userId, new DailyActivityPlanner.ChatLine(DailyActivityPlanner.ChatTopic.INVENTORY, random.nextInt(8), 0));
-            return;
-        }
+        // Nothing to pick in the form, so there is nothing to order this time.
+        if (available.isEmpty()) return;
         // Each resident has their own favourites, ranked by a fixed per-resident score.
         List<Product> favourites = available.stream()
             .sorted(Comparator.comparingDouble(product -> ResidentPersona.unit(persona.favouriteSeed(), product.name().hashCode())))
@@ -259,27 +255,6 @@ public class ResidentActivitySimulator {
 
     private static BigDecimal coordinate(double degrees) {
         return BigDecimal.valueOf(degrees).setScale(6, RoundingMode.HALF_UP);
-    }
-
-    // ---- assistant ----
-
-    private void chat(long userId, DailyActivityPlanner.ChatLine line) {
-        List<String> questions = Pools.QUESTIONS.get(line.topic());
-        String message = questions.get(line.variant() % questions.size());
-        if (message.contains("{n}")) {
-            int latest = jdbc.sql("SELECT COALESCE(MAX(resident_seq), 0) FROM supply_requests WHERE resident_id=:id")
-                .param("id", userId).query(Integer.class).single();
-            message = latest > 0 ? message.replace("{n}", String.valueOf(latest)) : "我的申请进度";
-        }
-        // A follow-up question continues the conversation the resident just had.
-        String conversationId = line.seq() == 0 ? null : jdbc.sql("""
-                SELECT id FROM assistant_conversations
-                WHERE user_id=:id AND updated_at > CURRENT_TIMESTAMP(3) - INTERVAL 15 MINUTE
-                ORDER BY updated_at DESC LIMIT 1
-                """).param("id", userId).query(String.class).optional().orElse(null);
-        double[] home = home(userId);
-        assistant.chat(userId, new AssistantModels.ChatRequest(conversationId, message, null,
-            coordinate(home[0]), coordinate(home[1]), null));
     }
 
     // ---- pickups ----
