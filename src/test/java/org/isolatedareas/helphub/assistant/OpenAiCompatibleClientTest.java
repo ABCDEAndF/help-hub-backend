@@ -53,4 +53,57 @@ class OpenAiCompatibleClientTest {
             .isEqualTo("check_inventory");
         server.verify();
     }
+
+    @Test
+    void movesToTheNextModelWhenOnesFreeQuotaIsUsedUpAndPausesIt() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        ObjectMapper json = new ObjectMapper();
+        RestClient client = builder.baseUrl("https://llm.example/v1").build();
+        java.util.concurrent.atomic.AtomicReference<java.time.Instant> now =
+            new java.util.concurrent.atomic.AtomicReference<>(java.time.Instant.parse("2026-10-10T00:00:00Z"));
+        java.time.Clock clock = new java.time.Clock() {
+            public java.time.ZoneId getZone() { return java.time.ZoneOffset.UTC; }
+            public java.time.Clock withZone(java.time.ZoneId zone) { return this; }
+            public java.time.Instant instant() { return now.get(); }
+        };
+        OpenAiCompatibleClient chain = new OpenAiCompatibleClient(java.util.List.of(
+            new OpenAiCompatibleClient.Target("a", client, "key", "model-a"),
+            new OpenAiCompatibleClient.Target("b", client, "key", "model-b")), clock, json);
+        String answer = """
+            {"choices":[{"message":{"content":"有的"}}]}
+            """;
+
+        server.expect(org.springframework.test.web.client.ExpectedCount.once(), requestTo("https://llm.example/v1/chat/completions"))
+            .andExpect(content().json("{\"model\":\"model-a\"}", false))
+            .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                .withStatus(org.springframework.http.HttpStatus.FORBIDDEN)
+                .body("{\"code\":\"AllocationQuota.FreeTierOnly\"}").contentType(MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://llm.example/v1/chat/completions"))
+            .andExpect(content().json("{\"model\":\"model-b\"}", false))
+            .andRespond(withSuccess(answer, MediaType.APPLICATION_JSON));
+        // While model-a is paused only model-b is asked.
+        server.expect(requestTo("https://llm.example/v1/chat/completions"))
+            .andExpect(content().json("{\"model\":\"model-b\"}", false))
+            .andRespond(withSuccess(answer, MediaType.APPLICATION_JSON));
+        // After the pause model-a is tried again first.
+        server.expect(requestTo("https://llm.example/v1/chat/completions"))
+            .andExpect(content().json("{\"model\":\"model-a\"}", false))
+            .andRespond(withSuccess(answer, MediaType.APPLICATION_JSON));
+
+        var messages = json.createArrayNode().add(json.createObjectNode().put("role", "user").put("content", "有米吗"));
+        assertThat(chain.complete(messages).content()).isEqualTo("有的");
+        now.set(now.get().plus(java.time.Duration.ofMinutes(10)));
+        assertThat(chain.complete(messages).content()).isEqualTo("有的");
+        now.set(now.get().plus(OpenAiCompatibleClient.QUOTA_PAUSE));
+        assertThat(chain.complete(messages).content()).isEqualTo("有的");
+        server.verify();
+    }
+
+    @Test
+    void isNotConfiguredWithoutAKey() {
+        ObjectMapper json = new ObjectMapper();
+        OpenAiCompatibleClient none = new OpenAiCompatibleClient("", "qwen-plus", RestClient.builder().build(), json);
+        assertThat(none.configured()).isFalse();
+    }
 }

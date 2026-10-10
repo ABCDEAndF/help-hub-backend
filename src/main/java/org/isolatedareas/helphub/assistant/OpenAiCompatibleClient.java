@@ -16,24 +16,58 @@ public class OpenAiCompatibleClient {
     private static final java.util.List<String> URGENCY_LEVELS =
         java.util.Arrays.stream(org.isolatedareas.helphub.domain.Urgency.values()).map(Enum::name).toList();
 
-    private final String apiKey;
-    private final String model;
-    private final RestClient client;
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OpenAiCompatibleClient.class);
+    /** A model whose quota is used up, or whose key is refused, is not asked again for this long. */
+    static final java.time.Duration QUOTA_PAUSE = java.time.Duration.ofMinutes(30);
+    /** After a timeout or a server error the model is tried again soon. */
+    static final java.time.Duration ERROR_PAUSE = java.time.Duration.ofMinutes(1);
+
+    /** One model at one provider; models are asked in order, skipping any that are paused. */
+    record Target(String label, RestClient client, String apiKey, String model) {
+    }
+
+    private final java.util.List<Target> targets;
+    private final java.util.Map<String, java.time.Instant> pausedUntil = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.time.Clock clock;
     private final ObjectMapper json;
 
+    /**
+     * The main provider takes a comma-separated list of models (free quotas are per model, so the next
+     * one takes over when one runs out); an optional fallback provider is asked after all of them.
+     */
     @Autowired
     public OpenAiCompatibleClient(@Value("${app.ai.base-url}") String baseUrl,
                                   @Value("${app.ai.api-key}") String apiKey,
                                   @Value("${app.ai.model}") String model,
+                                  @Value("${app.ai.fallback.base-url:}") String fallbackBaseUrl,
+                                  @Value("${app.ai.fallback.api-key:}") String fallbackApiKey,
+                                  @Value("${app.ai.fallback.model:}") String fallbackModel,
                                   RestClient.Builder builder, ObjectMapper json) {
-        this(apiKey, model, configuredClient(baseUrl, builder), json);
+        this(java.util.stream.Stream.concat(targets(baseUrl, apiKey, model, builder),
+                targets(fallbackBaseUrl, fallbackApiKey, fallbackModel, builder)).toList(),
+            java.time.Clock.systemUTC(), json);
     }
 
     OpenAiCompatibleClient(String apiKey, String model, RestClient client, ObjectMapper json) {
-        this.apiKey = apiKey;
-        this.model = model;
-        this.client = client;
+        this(java.util.List.of(new Target(model, client, apiKey, model)), java.time.Clock.systemUTC(), json);
+    }
+
+    OpenAiCompatibleClient(java.util.List<Target> targets, java.time.Clock clock, ObjectMapper json) {
+        this.targets = targets.stream().filter(target -> target.apiKey() != null && !target.apiKey().isBlank()
+            && target.model() != null && !target.model().isBlank()).toList();
+        this.clock = clock;
         this.json = json;
+    }
+
+    private static java.util.stream.Stream<Target> targets(String baseUrl, String apiKey, String models,
+                                                           RestClient.Builder builder) {
+        if (baseUrl == null || baseUrl.isBlank() || apiKey == null || apiKey.isBlank() || models == null) {
+            return java.util.stream.Stream.empty();
+        }
+        RestClient client = configuredClient(baseUrl.trim(), builder.clone());
+        String host = java.net.URI.create(baseUrl.trim()).getHost();
+        return java.util.Arrays.stream(models.split(",")).map(String::trim).filter(name -> !name.isEmpty())
+            .map(name -> new Target(host + "/" + name, client, apiKey.trim(), name));
     }
 
     private static RestClient configuredClient(String baseUrl, RestClient.Builder builder) {
@@ -44,19 +78,47 @@ public class OpenAiCompatibleClient {
     }
 
     public boolean configured() {
-        return apiKey != null && !apiKey.isBlank();
+        return !targets.isEmpty();
     }
 
+    /** Asks the first model that is not paused; a refusal or failure moves on to the next one. */
     public ModelMessage complete(ArrayNode messages) {
+        java.time.Instant now = clock.instant();
+        RuntimeException last = null;
+        for (Target target : targets) {
+            java.time.Instant until = pausedUntil.get(target.label());
+            if (until != null && now.isBefore(until)) continue;
+            try {
+                ModelMessage answer = complete(target, messages);
+                pausedUntil.remove(target.label());
+                return answer;
+            } catch (RuntimeException failure) {
+                last = failure;
+                java.time.Duration pause = quotaOrKey(failure) ? QUOTA_PAUSE : ERROR_PAUSE;
+                pausedUntil.put(target.label(), now.plus(pause));
+                log.warn("LLM {} unavailable for {} min ({}); trying the next one", target.label(),
+                    pause.toMinutes(), failure.getMessage());
+            }
+        }
+        throw last != null ? last : new IllegalStateException("Every configured LLM is paused");
+    }
+
+    // Used-up free quota (403 AllocationQuota.FreeTierOnly), refused key (401), payment (402), rate limit (429).
+    private static boolean quotaOrKey(RuntimeException failure) {
+        return failure instanceof org.springframework.web.client.RestClientResponseException response
+            && java.util.Set.of(401, 402, 403, 429).contains(response.getStatusCode().value());
+    }
+
+    private ModelMessage complete(Target target, ArrayNode messages) {
         ObjectNode body = json.createObjectNode();
-        body.put("model", model);
+        body.put("model", target.model());
         body.put("temperature", 0.1);
         body.set("messages", messages);
         body.set("tools", tools());
         body.put("tool_choice", "auto");
-        JsonNode response = client.post().uri("/chat/completions")
+        JsonNode response = target.client().post().uri("/chat/completions")
             .contentType(MediaType.APPLICATION_JSON)
-            .header("Authorization", "Bearer " + apiKey)
+            .header("Authorization", "Bearer " + target.apiKey())
             .body(body).retrieve().body(JsonNode.class);
         JsonNode message = response == null ? null : response.path("choices").path(0).path("message");
         if (message == null || message.isMissingNode()) throw new IllegalStateException("LLM returned no message");
