@@ -28,7 +28,7 @@ public class AssistantService {
         "(?:申请|单子|订单|工单|request|#)\\s*#?\\s*(\\d+)|(\\d+)\\s*号?\\s*(?:申请|单子|订单|工单)",
         Pattern.CASE_INSENSITIVE);
     private static final String SYSTEM_PROMPT = """
-        你是 Isolated Areas Help Hub 的公益服务助手。使用简明中文回答。
+        你是 Isolated Areas Help Hub 的公益服务助手。使用简明中文回答，用纯文本，不要使用 Markdown（不要 **、#、` 等符号）。
         库存、服务点和申请状态只能通过工具查询，绝不猜测。
         工具已按当前登录居民的身份鉴权，你有权代表其查询本人数据；
         绝不能以隐私、权限或“请联系官方渠道”为由拒绝调用工具。
@@ -128,7 +128,7 @@ public class AssistantService {
                 return fallback(userId, conversationId, input.lookupText());
             }
             if (response.toolCalls() == null || !response.toolCalls().isArray() || response.toolCalls().isEmpty()) {
-                String content = response.content().isBlank() ? "请补充您需要的物资或服务信息。" : response.content();
+                String content = response.content().isBlank() ? "请补充您需要的物资或服务信息。" : plainText(response.content());
                 saveMessage(conversationId, "ASSISTANT", content, null);
                 return new AssistantModels.ChatResponse(conversationId, content, executions, null, true);
             }
@@ -257,6 +257,12 @@ public class AssistantService {
             }
         }
         return content;
+    }
+
+    /** The mini program shows text as it is, so Markdown a model adds anyway (bold, headings, code) is removed. */
+    static String plainText(String content) {
+        return content.replace("**", "").replace("__", "").replace("`", "")
+            .replaceAll("(?m)^\\s{0,3}#{1,6}\\s*", "").trim();
     }
 
     /**

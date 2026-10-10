@@ -121,6 +121,12 @@ class AssistantFallbackResponseTest {
     }
 
     @Test
+    void removesMarkdownTheMiniProgramWouldShowAsIs() {
+        assertThat(AssistantService.plainText("## 服务\n1. **Supply Requests**: use `求助`"))
+            .isEqualTo("服务\n1. Supply Requests: use 求助");
+    }
+
+    @Test
     void mapsColloquialCategories() {
         assertThat(AssistantService.matchedCategory("有什么吃的")).isEqualTo("FOOD");
         assertThat(AssistantService.matchedItemTerm("应急物资有吗")).isEqualTo("应急");
