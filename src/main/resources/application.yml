@@ -78,6 +78,8 @@ app:
     jwt-secret: ${JWT_SECRET:local-development-secret-change-me-now}
     token-ttl: PT12H
     dev-login-enabled: ${DEV_LOGIN_ENABLED:true}
+    # Browser sign-in for the web version (auth/WebAuthController); a device key stands in for WeChat.
+    web-login-enabled: ${WEB_LOGIN_ENABLED:true}
     operator-phone: ${OPERATOR_LOGIN_PHONE:}
     operator-password: ${OPERATOR_LOGIN_PASSWORD:}
   ai:

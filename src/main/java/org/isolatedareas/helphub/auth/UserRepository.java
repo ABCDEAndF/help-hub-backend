@@ -80,6 +80,29 @@ public class UserRepository {
             .optional();
     }
 
+    /** A web resident, keyed by the hash of their browser's device key; created on first sign-in. */
+    public UserAccount upsertWebUser(String deviceHash, String displayName) {
+        jdbc.sql("""
+                INSERT IGNORE INTO users (web_device_hash, display_name, role)
+                VALUES (:deviceHash, :displayName, 'RESIDENT')
+                """)
+            .param("deviceHash", deviceHash)
+            .param("displayName", displayName)
+            .update();
+        return jdbc.sql("""
+                SELECT id, phone, display_name, role, enabled
+                FROM users WHERE web_device_hash = :deviceHash
+                """)
+            .param("deviceHash", deviceHash)
+            .query((rs, rowNum) -> new UserAccount(
+                rs.getLong("id"),
+                rs.getString("phone"),
+                rs.getString("display_name"),
+                Role.valueOf(rs.getString("role")),
+                rs.getBoolean("enabled")))
+            .single();
+    }
+
     /** Creates a resident on first sign-in; a returning resident keeps the name they chose. */
     public UserAccount upsertWechatUser(String openId, String displayName) {
         jdbc.sql("""

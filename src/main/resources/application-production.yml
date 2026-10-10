@@ -24,6 +24,8 @@ app:
   auth:
     jwt-secret: ${JWT_SECRET}
     dev-login-enabled: false
+    # The web version of the resident app signs in here; WEB_LOGIN_ENABLED=false closes that channel.
+    web-login-enabled: ${WEB_LOGIN_ENABLED:true}
 
 logging:
   level:
