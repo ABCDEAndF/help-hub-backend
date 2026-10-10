@@ -103,6 +103,15 @@ class AssistantFallbackResponseTest {
     }
 
     @Test
+    void tellsHowToQuestionsFromQuestionsAboutOnesOwnRequests() {
+        assertThat(AssistantService.asksHowTo("怎么申请和领取？")).isTrue();
+        assertThat(AssistantService.asksHowTo("如何申请配送")).isTrue();
+        assertThat(AssistantService.asksHowTo("我的申请进度怎么样了")).isFalse();
+        assertThat(AssistantService.asksHowTo("我的申请怎么样了")).isFalse();
+        assertThat(AssistantService.asksHowTo("申请到哪一步了，怎么还没批")).isFalse();
+    }
+
+    @Test
     void mapsColloquialCategories() {
         assertThat(AssistantService.matchedCategory("有什么吃的")).isEqualTo("FOOD");
         assertThat(AssistantService.matchedItemTerm("应急物资有吗")).isEqualTo("应急");

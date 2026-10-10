@@ -186,8 +186,7 @@ public class AssistantService {
             content = "如有人身危险或紧急医疗情况，请立即拨打 120；涉及治安或人身安全请拨打 110。这里可以继续帮您查询青浦公益物资和服务点，但不能代替紧急救援。";
         } else if (containsAny(message, "领取码", "预约记录", "我的预约", "预约了什么", "预约状态")) {
             content = describeReservations(run(userId, "list_my_reservations", json.createObjectNode(), executions));
-        } else if (containsAny(message, "怎么", "如何", "流程", "步骤", "怎样")
-            && containsAny(message, "申请", "预约", "领", "提交", "配送", "送", "求助", "用")) {
+        } else if (asksHowTo(message)) {
             content = FLOW;
         } else if (containsAny(message, "申请", "进度", "状态", "单子", "订单", "工单", "request")) {
             String requestId = extractRequestId(message);
@@ -228,6 +227,18 @@ public class AssistantService {
         }
         saveMessage(conversationId, "ASSISTANT", content, null);
         return new AssistantModels.ChatResponse(conversationId, content, executions, null, false);
+    }
+
+    /**
+     * "怎么申请" asks how the service works; "我的申请怎么样了" / "申请到哪一步了" asks about the resident's
+     * own requests, even though both mention 申请 and 怎么.
+     */
+    static boolean asksHowTo(String message) {
+        String text = message == null ? "" : message;
+        boolean how = java.util.stream.Stream.of("怎么", "如何", "流程", "步骤", "怎样").anyMatch(text::contains);
+        boolean topic = java.util.stream.Stream.of("申请", "预约", "领", "提交", "配送", "送", "求助", "用").anyMatch(text::contains);
+        boolean status = java.util.stream.Stream.of("进度", "状态", "到哪", "怎么样", "批了", "批准了吗").anyMatch(text::contains);
+        return how && topic && !status;
     }
 
     private Object run(long userId, String tool, JsonNode args, List<AssistantModels.ToolExecution> executions) {
