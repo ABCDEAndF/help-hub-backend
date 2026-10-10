@@ -84,6 +84,17 @@ public class AssistantService {
 
         saveMessage(conversationId, "USER", input.message(), null);
         if (!model.configured()) return fallback(userId, conversationId, input.lookupText());
+        // Stock, service points and opening hours, the resident's own requests and codes: answered from
+        // live data, which is always right, where a small model was seen to guess hours and list the
+        // wrong items. The model takes everything else, above all requests to have something done.
+        if (!asksForAction(input.lookupText())) {
+            List<AssistantModels.ToolExecution> executions = new ArrayList<>();
+            String answer = lookup(userId, input.lookupText(), executions);
+            if (answer != null) {
+                saveMessage(conversationId, "ASSISTANT", answer, null);
+                return new AssistantModels.ChatResponse(conversationId, answer, executions, null, false);
+            }
+        }
 
         ArrayNode messages = conversationMessages(conversationId);
         appendRequestIdHint(messages, input.message());
@@ -181,6 +192,26 @@ public class AssistantService {
 
     private AssistantModels.ChatResponse fallback(long userId, String conversationId, String message) {
         List<AssistantModels.ToolExecution> executions = new ArrayList<>();
+        String found = lookup(userId, message, executions);
+        String content = found == null ? HELP : found;
+        saveMessage(conversationId, "ASSISTANT", content, null);
+        return new AssistantModels.ChatResponse(conversationId, content, executions, null, false);
+    }
+
+    /**
+     * Asks to have something done ("帮我申请两袋大米", "我要预约") rather than to be told something: only
+     * the model can carry that out, through tools and the resident's confirmation.
+     */
+    static boolean asksForAction(String message) {
+        String text = message == null ? "" : message;
+        boolean action = java.util.stream.Stream.of("帮我", "我要", "我想", "给我", "替我", "提交", "送到", "送来", "预约一", "申请一", "申请两", "申请几")
+            .anyMatch(text::contains);
+        boolean asking = java.util.stream.Stream.of("领取码", "进度", "状态", "几点", "在哪").anyMatch(text::contains);
+        return action && !asking;
+    }
+
+    /** The answer from live data for a question it recognises, or null when it does not. */
+    private String lookup(long userId, String message, List<AssistantModels.ToolExecution> executions) {
         String content;
         if (containsAny(message, "危险", "昏迷", "晕倒", "流血", "火灾", "报警", "救命", "需要急救", "120", "110")) {
             content = "如有人身危险或紧急医疗情况，请立即拨打 120；涉及治安或人身安全请拨打 110。这里可以继续帮您查询青浦公益物资和服务点，但不能代替紧急救援。";
@@ -222,11 +253,10 @@ public class AssistantService {
                 "时间", "附近", "位置")) {
                 content = describeServicePoints(run(userId, "list_service_points", json.createObjectNode(), executions));
             } else {
-                content = HELP;
+                content = null;
             }
         }
-        saveMessage(conversationId, "ASSISTANT", content, null);
-        return new AssistantModels.ChatResponse(conversationId, content, executions, null, false);
+        return content;
     }
 
     /**

@@ -101,6 +101,18 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
+    void pausesAUsedUpModelForLongButABusyOneOnlyBriefly() {
+        var quota = org.springframework.web.client.HttpClientErrorException.create(
+            org.springframework.http.HttpStatus.FORBIDDEN, "Forbidden", null, null, null);
+        var busy = org.springframework.web.client.HttpClientErrorException.create(
+            org.springframework.http.HttpStatus.TOO_MANY_REQUESTS, "Too Many Requests", null, null, null);
+        assertThat(OpenAiCompatibleClient.pauseAfter(quota)).isEqualTo(OpenAiCompatibleClient.QUOTA_PAUSE);
+        assertThat(OpenAiCompatibleClient.pauseAfter(busy)).isEqualTo(OpenAiCompatibleClient.BUSY_PAUSE);
+        assertThat(OpenAiCompatibleClient.pauseAfter(new IllegalStateException("timeout")))
+            .isEqualTo(OpenAiCompatibleClient.ERROR_PAUSE);
+    }
+
+    @Test
     void isNotConfiguredWithoutAKey() {
         ObjectMapper json = new ObjectMapper();
         OpenAiCompatibleClient none = new OpenAiCompatibleClient("", "qwen-plus", RestClient.builder().build(), json);

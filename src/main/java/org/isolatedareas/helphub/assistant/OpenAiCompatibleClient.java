@@ -21,6 +21,8 @@ public class OpenAiCompatibleClient {
     static final java.time.Duration QUOTA_PAUSE = java.time.Duration.ofMinutes(30);
     /** After a timeout or a server error the model is tried again soon. */
     static final java.time.Duration ERROR_PAUSE = java.time.Duration.ofMinutes(1);
+    /** A busy model (429: rate limit, or a free model allowing one request at a time) is only skipped briefly. */
+    static final java.time.Duration BUSY_PAUSE = java.time.Duration.ofSeconds(30);
 
     /** One model at one provider; models are asked in order, skipping any that are paused. */
     record Target(String label, RestClient client, String apiKey, String model) {
@@ -94,19 +96,22 @@ public class OpenAiCompatibleClient {
                 return answer;
             } catch (RuntimeException failure) {
                 last = failure;
-                java.time.Duration pause = quotaOrKey(failure) ? QUOTA_PAUSE : ERROR_PAUSE;
+                java.time.Duration pause = pauseAfter(failure);
                 pausedUntil.put(target.label(), now.plus(pause));
-                log.warn("LLM {} unavailable for {} min ({}); trying the next one", target.label(),
-                    pause.toMinutes(), failure.getMessage());
+                log.warn("LLM {} skipped for {} s ({}); trying the next one", target.label(),
+                    pause.toSeconds(), failure.getMessage());
             }
         }
         throw last != null ? last : new IllegalStateException("Every configured LLM is paused");
     }
 
-    // Used-up free quota (403 AllocationQuota.FreeTierOnly), refused key (401), payment (402), rate limit (429).
-    private static boolean quotaOrKey(RuntimeException failure) {
-        return failure instanceof org.springframework.web.client.RestClientResponseException response
-            && java.util.Set.of(401, 402, 403, 429).contains(response.getStatusCode().value());
+    // Used-up free quota (403 AllocationQuota.FreeTierOnly), refused key (401) or payment (402) last;
+    // being busy (429) passes in seconds; anything else (timeouts, 5xx) in about a minute.
+    static java.time.Duration pauseAfter(RuntimeException failure) {
+        if (!(failure instanceof org.springframework.web.client.RestClientResponseException response)) return ERROR_PAUSE;
+        int status = response.getStatusCode().value();
+        if (status == 429) return BUSY_PAUSE;
+        return java.util.Set.of(401, 402, 403).contains(status) ? QUOTA_PAUSE : ERROR_PAUSE;
     }
 
     private ModelMessage complete(Target target, ArrayNode messages) {

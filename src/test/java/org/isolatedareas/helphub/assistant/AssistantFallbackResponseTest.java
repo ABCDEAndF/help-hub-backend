@@ -112,6 +112,15 @@ class AssistantFallbackResponseTest {
     }
 
     @Test
+    void leavesRequestsToHaveSomethingDoneToTheModel() {
+        assertThat(AssistantService.asksForAction("帮我申请两袋大米，送到家")).isTrue();
+        assertThat(AssistantService.asksForAction("我要预约领取")).isTrue();
+        assertThat(AssistantService.asksForAction("还有大米吗？")).isFalse();
+        assertThat(AssistantService.asksForAction("我想知道我的领取码")).isFalse();
+        assertThat(AssistantService.asksForAction("服务点几点开门")).isFalse();
+    }
+
+    @Test
     void mapsColloquialCategories() {
         assertThat(AssistantService.matchedCategory("有什么吃的")).isEqualTo("FOOD");
         assertThat(AssistantService.matchedItemTerm("应急物资有吗")).isEqualTo("应急");
