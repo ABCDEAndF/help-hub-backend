@@ -15,7 +15,7 @@ import org.springframework.web.client.RestClient;
 class OpenAiCompatibleClientTest {
 
     @Test
-    void sendsToolsAndParsesToolCallsFromAnOpenAiCompatibleProvider() {
+    void asksForJsonAndReturnsTheModelsText() {
         RestClient.Builder builder = RestClient.builder();
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
         ObjectMapper json = new ObjectMapper();
@@ -26,31 +26,17 @@ class OpenAiCompatibleClientTest {
             .andExpect(header("Authorization", "Bearer test-key"))
             .andExpect(content().contentType(MediaType.APPLICATION_JSON))
             .andExpect(content().json("""
-                {"model":"test-model","tool_choice":"auto","tools":[
-                  {"type":"function","function":{"name":"check_inventory"}},
-                  {"type":"function","function":{"name":"get_request_status"}},
-                  {"type":"function","function":{"name":"list_my_requests"}},
-                  {"type":"function","function":{"name":"list_my_reservations"}},
-                  {"type":"function","function":{"name":"list_service_points"}},
-                  {"type":"function","function":{"name":"find_nearby_service_points"}},
-                  {"type":"function","function":{"name":"prepare_supply_request"}},
-                  {"type":"function","function":{"name":"reserve_pickup_slot"}}
-                ]}
+                {"model":"test-model","response_format":{"type":"json_object"}}
                 """, false))
             .andRespond(withSuccess("""
-                {"choices":[{"message":{"content":"",
-                  "tool_calls":[{"id":"call-1","type":"function","function":{
-                    "name":"check_inventory","arguments":"{\\"category\\":\\"FOOD\\"}"}}]}}]}
+                {"choices":[{"message":{"content":"{\\"actions\\":[{\\"intent\\":\\"stock\\"}]}"}}]}
                 """, MediaType.APPLICATION_JSON));
 
-        OpenAiCompatibleClient.ModelMessage response = client.complete(json.createArrayNode()
+        String response = client.completeJson(json.createArrayNode()
             .add(json.createObjectNode().put("role", "user").put("content", "还有食物吗？")));
 
         assertThat(client.configured()).isTrue();
-        assertThat(response.content()).isEmpty();
-        assertThat(response.toolCalls()).hasSize(1);
-        assertThat(response.toolCalls().path(0).path("function").path("name").asText())
-            .isEqualTo("check_inventory");
+        assertThat(response).isEqualTo("{\"actions\":[{\"intent\":\"stock\"}]}");
         server.verify();
     }
 
@@ -92,11 +78,11 @@ class OpenAiCompatibleClientTest {
             .andRespond(withSuccess(answer, MediaType.APPLICATION_JSON));
 
         var messages = json.createArrayNode().add(json.createObjectNode().put("role", "user").put("content", "有米吗"));
-        assertThat(chain.complete(messages).content()).isEqualTo("有的");
+        assertThat(chain.completeText(messages)).isEqualTo("有的");
         now.set(now.get().plus(java.time.Duration.ofMinutes(10)));
-        assertThat(chain.complete(messages).content()).isEqualTo("有的");
+        assertThat(chain.completeText(messages)).isEqualTo("有的");
         now.set(now.get().plus(OpenAiCompatibleClient.QUOTA_PAUSE));
-        assertThat(chain.complete(messages).content()).isEqualTo("有的");
+        assertThat(chain.completeText(messages)).isEqualTo("有的");
         server.verify();
     }
 

@@ -112,12 +112,125 @@ class AssistantFallbackResponseTest {
     }
 
     @Test
-    void leavesRequestsToHaveSomethingDoneToTheModel() {
-        assertThat(AssistantService.asksForAction("帮我申请两袋大米，送到家")).isTrue();
-        assertThat(AssistantService.asksForAction("我要预约领取")).isTrue();
-        assertThat(AssistantService.asksForAction("还有大米吗？")).isFalse();
-        assertThat(AssistantService.asksForAction("我想知道我的领取码")).isFalse();
-        assertThat(AssistantService.asksForAction("服务点几点开门")).isFalse();
+    void answersInTheLanguageTheResidentWroteInWhateverTheInterfaceShows() {
+        assertThat(AssistantService.replyLanguage("help me set my location", "zh")).isEqualTo("en");
+        assertThat(AssistantService.replyLanguage("有大米吗", "en")).isEqualTo("zh");
+        assertThat(AssistantService.replyLanguage("I want 大米", "zh")).isEqualTo("en");
+        assertThat(AssistantService.replyLanguage("我想要 masks", "en")).isEqualTo("zh");
+        // Nothing to tell by: the interface decides.
+        assertThat(AssistantService.replyLanguage("#3", "en")).isEqualTo("en");
+        assertThat(AssistantService.replyLanguage("3", null)).isEqualTo("zh");
+    }
+
+    @Test
+    void readsAPlainYesOrNoToTheWaitingActionAndLeavesAnythingElseToTheModel() {
+        for (String yes : List.of("确认", "好的", "好的，谢谢", "嗯嗯", "是的确认", "可以", "OK", "okay!", "Yes please", "sure", "确认执行", "行吧")) {
+            assertThat(AssistantService.answerTo(yes, "prepare_supply_request")).as(yes).isEqualTo(AssistantService.Answer.YES);
+        }
+        for (String no : List.of("不要", "不用了", "算了", "no", "nope", "No thanks", "先不要", "取消")) {
+            assertThat(AssistantService.answerTo(no, "prepare_supply_request")).as(no).isEqualTo(AssistantService.Answer.NO);
+        }
+        for (String other : List.of("改成3袋", "好不好", "不确认", "可以送到楼下吗", "what time do they open", "yes but 2 bags", "")) {
+            assertThat(AssistantService.answerTo(other, "prepare_supply_request")).as(other).isEqualTo(AssistantService.Answer.UNSURE);
+        }
+        // Answering a cancellation with "取消" could mean either: the model reads it in context.
+        assertThat(AssistantService.answerTo("取消", "cancel_my_request")).isEqualTo(AssistantService.Answer.UNSURE);
+        assertThat(AssistantService.answerTo("确认取消", "cancel_my_request")).isEqualTo(AssistantService.Answer.UNSURE);
+        assertThat(AssistantService.answerTo("确认", "cancel_my_request")).isEqualTo(AssistantService.Answer.YES);
+    }
+
+    @Test
+    void explainsWhyAnAgreedActionFailedInTheResidentsWords() {
+        assertThat(AssistantService.reason(new IllegalArgumentException("Confirmation expired or was already used"))).contains("5 分钟");
+        assertThat(AssistantService.reason(new org.springframework.web.server.ResponseStatusException(
+            org.springframework.http.HttpStatus.CONFLICT, org.isolatedareas.helphub.requests.RequestService.NOT_CANCELLABLE)))
+            .contains("只有待审核的申请可以自己取消");
+        assertThat(AssistantService.reason(new org.springframework.web.server.ResponseStatusException(
+            org.springframework.http.HttpStatus.CONFLICT, "Feedback already given"))).contains("已经评价过了");
+        assertThat(AssistantService.reason(new IllegalStateException("boom"))).isEqualTo("请稍后再试。");
+    }
+
+    @Test
+    void saysWhereTheDeliveryIsOrWhyThereIsNone() {
+        var waiting = new SupplyRequestView(17, 3, 2, "居民", "FOOD", null, "大米", 2, Urgency.NORMAL,
+            FulfillmentMethod.DELIVERY, RequestStatus.SUBMITTED, BigDecimal.ONE, BigDecimal.ONE, "青浦", null, null, null, null,
+            null, null, null, null, Instant.EPOCH, Instant.EPOCH);
+        assertThat(AssistantService.describeDelivery(new AssistantToolExecutor.Delivery(waiting, null)))
+            .isEqualTo("申请 #2 还在等待审核，批准后系统才会安排补给车。");
+        var trip = new org.isolatedareas.helphub.automation.CartTripService.Tracking(1, "青浦公益补给车一号", 31.1, 121.1,
+            "配送途中", Instant.parse("2026-10-11T03:20:00Z"), false, 31.2, 121.2, List.of());
+        assertThat(AssistantService.describeDelivery(new AssistantToolExecutor.Delivery(waiting, trip)))
+            .isEqualTo("申请 #2：青浦公益补给车一号，配送途中，预计 11:20 送达。可在地图页查看车辆位置。");
+        assertThat(AssistantService.describeDelivery(new AssistantToolExecutor.Delivery(null, null))).contains("还没有选择补给车配送");
+    }
+
+    @Test
+    void answersQuestionsAboutNoticesWithoutAModel() {
+        var executor = org.mockito.Mockito.mock(AssistantToolExecutor.class);
+        org.mockito.Mockito.when(executor.execute(org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq("list_my_notifications"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(new AssistantToolExecutor.ToolResult(List.of(), null));
+        var service = new AssistantService(null, executor, null, null, new com.fasterxml.jackson.databind.ObjectMapper(), 4, "18321961090");
+        assertThat(service.lookupForTest(1L, "有没有新消息")).isEqualTo("您还没有收到任何通知。");
+    }
+
+    @Test
+    void listsNoticesByTheNamesTheNoticesPageUses() {
+        var payload = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode().put("requestNumber", 3);
+        var notice = new AssistantToolExecutor.Notice("REQUEST_APPROVED", payload, Instant.parse("2026-10-11T01:30:00Z"));
+        assertThat(AssistantService.describeNotices(List.of(notice)))
+            .startsWith("您最近的通知：\n• 10月11日 09:30 需求已批准，可预约物资（申请 #3）\n");
+        assertThat(AssistantService.describeNotices(List.of())).isEqualTo("您还没有收到任何通知。");
+    }
+
+    @Test
+    void treatsOnlyClearDangerAsAnEmergency() {
+        assertThat(AssistantService.inDanger("救命！我奶奶晕倒了")).isTrue();
+        assertThat(AssistantService.inDanger("家里着火了")).isTrue();
+        assertThat(AssistantService.inDanger("my grandmother fainted, help me")).isTrue();
+        assertThat(AssistantService.inDanger("please call 120")).isTrue();
+        // Asking for help with the app, or for a first aid kit, is not an emergency.
+        assertThat(AssistantService.inDanger("help me set my location")).isFalse();
+        assertThat(AssistantService.inDanger("我需要急救包")).isFalse();
+        assertThat(AssistantService.inDanger("I need 120 masks")).isFalse();
+        assertThat(AssistantService.inDanger("帮我申请两袋大米")).isFalse();
+    }
+
+    @Test
+    void keepsTheEmergencyMappingOnlyForRealDanger() {
+        var setLocation = new AssistantModels.ChatRequest(null, "help me set locations", null, null, null, null, "en", "救命", null);
+        var fainted = new AssistantModels.ChatRequest(null, "my grandmother fainted, help me", null, null, null, null, "en", "救命", null);
+        var chinese = new AssistantModels.ChatRequest(null, "救命", null, null, null, null, null, null, null);
+        assertThat(AssistantService.lookupText(setLocation)).isEqualTo("help me set locations");
+        assertThat(AssistantService.lookupText(fainted)).isEqualTo("救命");
+        assertThat(AssistantService.lookupText(chinese)).isEqualTo("救命");
+    }
+
+    @Test
+    void answersTheItemsAskedForWhetherStockedReservedOrMissing() {
+        var rice = new InventoryItemView(1, 1, "邻需通·夏阳公益服务点", "青松路", "QP-XY-RICE-5KG",
+            "公益大米 5 千克", "FOOD", "袋", 0, 80, 0, 80, 15, 0, Instant.EPOCH);
+        var mask = new InventoryItemView(2, 1, "邻需通·夏阳公益服务点", "青松路", "QP-XY-MASK-50",
+            "医用外科口罩 50 只", "MEDICAL", "盒", 0, 14, 14, 0, 5, 0, Instant.EPOCH);
+        String answer = AssistantService.describeAskedItems(List.of(rice, mask), List.of("大米", "口罩", "助行器"));
+        assertThat(answer.split("\n\n")).hasSize(3);
+        assertThat(answer).contains("公益大米 5 千克：80袋（邻需通·夏阳公益服务点）", "医用外科口罩 50 只 目前已全部被预约",
+            "没有名称包含“助行器”");
+        // Asked only for masks: no rice in the answer.
+        assertThat(AssistantService.describeAskedItems(List.of(rice, mask), List.of("口罩"))).doesNotContain("大米");
+    }
+
+    @Test
+    void listsTheNearestPointsWithDistanceAndHours() {
+        var point = new LinkedHashMap<String, Object>();
+        point.put("name", "邻需通·夏阳公益服务点");
+        point.put("address", "上海市青浦区青松路245号附近");
+        point.put("distanceMeters", 1234L);
+        point.put("opensAt", java.time.LocalTime.of(8, 30));
+        point.put("closesAt", java.time.LocalTime.of(16, 30));
+        assertThat(AssistantService.describeNearby(List.of(point)))
+            .startsWith("离您最近的服务点：\n• 邻需通·夏阳公益服务点：上海市青浦区青松路245号附近，约 1.2 公里，营业时间 08:30–16:30");
+        assertThat(AssistantService.describeNearby(List.of())).contains("10 公里内没有服务点");
     }
 
     @Test

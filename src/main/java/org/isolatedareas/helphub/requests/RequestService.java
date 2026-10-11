@@ -54,7 +54,7 @@ public class RequestService {
     }
 
     /** Straight-line distance to the nearest active service point; infinite when none is active. */
-    double nearestServicePointMeters(double latitude, double longitude) {
+    public double nearestServicePointMeters(double latitude, double longitude) {
         return jdbc.sql("SELECT latitude, longitude FROM service_points WHERE status='ACTIVE'")
             .query((rs, n) -> org.isolatedareas.helphub.geo.GeoMath.distanceMeters(latitude, longitude,
                 rs.getDouble("latitude"), rs.getDouble("longitude")))
@@ -120,6 +120,25 @@ public class RequestService {
         return after;
     }
 
+    /**
+     * A resident withdraws their own request while it still waits for staff. Once staff have decided,
+     * stock may be locked and a code issued, so only staff can cancel it (the resident calls the hotline).
+     */
+    @Transactional
+    public SupplyRequestView cancelByResident(long requestId, long residentId) {
+        SupplyRequestView request = requests.findOwned(requestId, residentId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supply request not found"));
+        if (!cancellableByResident(request.status())) throw new ResponseStatusException(HttpStatus.CONFLICT, NOT_CANCELLABLE);
+        // The resident did this themselves, so no notice is sent about it.
+        return transition(requestId, residentId, new TransitionRequest(RequestStatus.CANCELLED, null, null), false);
+    }
+
+    public static boolean cancellableByResident(RequestStatus status) {
+        return status == RequestStatus.SUBMITTED || status == RequestStatus.UNDER_REVIEW;
+    }
+
+    public static final String NOT_CANCELLABLE = "只有待审核的申请可以自己取消；已有处理结果的申请如需取消，请拨打社区服务热线。";
+
     /** A cancelled request must not keep stock locked until its reservation expires. */
     private void releaseHeldStock(long requestId) {
         jdbc.sql("""
@@ -135,7 +154,7 @@ public class RequestService {
         return switch (from) {
             // Staff may decline straight from the queue; approval goes through ApprovalService.
             case SUBMITTED -> to == RequestStatus.UNDER_REVIEW || to == RequestStatus.REJECTED || to == RequestStatus.CANCELLED;
-            case UNDER_REVIEW -> to == RequestStatus.APPROVED || to == RequestStatus.REJECTED;
+            case UNDER_REVIEW -> to == RequestStatus.APPROVED || to == RequestStatus.REJECTED || to == RequestStatus.CANCELLED;
             // FULFILLED straight from APPROVED: the supplies were already handed over against a pickup code.
             case APPROVED -> to == RequestStatus.SCHEDULED || to == RequestStatus.FULFILLED || to == RequestStatus.CANCELLED;
             case SCHEDULED -> to == RequestStatus.FULFILLED || to == RequestStatus.CANCELLED;

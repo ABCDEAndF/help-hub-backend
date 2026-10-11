@@ -23,9 +23,11 @@ public final class AssistantModels {
         // "en" when the resident uses the English interface; anything else means Chinese. Optional.
         @Size(max = 8) String language,
         // The same question in words the live-data lookup understands (it only reads Chinese), sent
-        // by the English interface. Used only when no model answers; the resident's own words are
-        // what is stored and what a model sees. Optional.
-        @Size(max = 2000) String lookupMessage
+        // for a question asked in English. Used only when no model answers; the resident's own words
+        // are what is stored and what a model sees. Optional.
+        @Size(max = 2000) String lookupMessage,
+        // True when the place sent is the random default the system assigned, not one the resident set.
+        Boolean placeIsDefault
     ) {
         public boolean english() {
             return "en".equalsIgnoreCase(language);
@@ -42,8 +44,25 @@ public final class AssistantModels {
         String message,
         List<ToolExecution> toolExecutions,
         Confirmation confirmation,
-        boolean aiProviderUsed
+        // True when the model wrote the message itself, in the reply language, so it is shown as it is.
+        // False when the message is composed in Chinese from live data, for the client to translate.
+        boolean aiProviderUsed,
+        // "en" or "zh": the language the resident asked in, which the reply should be read in.
+        String replyLanguage,
+        // Whether a model understood the question (it may still be answered from live data).
+        boolean modelUsed,
+        // What the client does on the resident's behalf right away: save a place, switch language,
+        // dial the hotline, open navigation or a page. Never null.
+        List<ClientAction> clientActions
     ) {
+    }
+
+    /**
+     * type: "setPlace" {latitude, longitude, address}, "setLanguage" {language}, "call" {phone},
+     * "openLocation" {latitude, longitude, name, address}, "openPage" {page, path, requestId?, requestNumber?},
+     * "feedbackGiven" {requestId}.
+     */
+    public record ClientAction(String type, java.util.Map<String, Object> data) {
     }
 
     public record ToolExecution(String tool, Object result) {

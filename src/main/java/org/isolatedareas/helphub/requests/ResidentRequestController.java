@@ -20,10 +20,19 @@ import org.springframework.web.bind.annotation.RestController;
 public class ResidentRequestController {
     private final SupplyRequestRepository requests;
     private final SubmissionService submissions;
+    private final RequestService requestService;
 
-    public ResidentRequestController(SupplyRequestRepository requests, SubmissionService submissions) {
+    public ResidentRequestController(SupplyRequestRepository requests, SubmissionService submissions,
+                                     RequestService requestService) {
         this.requests = requests;
         this.submissions = submissions;
+        this.requestService = requestService;
+    }
+
+    /** Withdraws the resident's own request while it still waits for review. */
+    @PostMapping("/{id}/cancel")
+    SupplyRequestView cancel(@AuthenticationPrincipal Jwt jwt, @PathVariable long id) {
+        return requestService.cancelByResident(id, CurrentUser.id(jwt));
     }
 
     @PostMapping
